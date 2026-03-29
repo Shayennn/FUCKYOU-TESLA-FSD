@@ -55,6 +55,18 @@ inline void setSpeedProfileV12V13(can_frame& frame, int profile) {
   frame.data[6] |= (profile << 1);
 }
 
+inline void setBit(can_frame& frame, int bit, bool value) {
+  // Determine which byte and which bit within that byte
+  int byteIndex = bit / 8;
+  int bitIndex = bit % 8;
+  // Set the desired bit
+  uint8_t mask = static_cast<uint8_t>(1U << bitIndex);
+  if (value) {
+    frame.data[byteIndex] |= mask;
+  } else {
+    frame.data[byteIndex] &= static_cast<uint8_t>(~mask);
+  }
+}
 
 
 struct LegacyHandler : public CarManagerBase {
@@ -195,19 +207,6 @@ void setup() {
   Serial.println("MCP25625 ready @ 500k 1");
 }
 
-
-inline void setBit(can_frame& frame, int bit, bool value) {
-  // Determine which byte and which bit within that byte
-  int byteIndex = bit / 8;
-  int bitIndex = bit % 8;
-  // Set the desired bit
-  uint8_t mask = static_cast<uint8_t>(1U << bitIndex);
-  if (value) {
-    frame.data[byteIndex] |= mask;
-  } else {
-    frame.data[byteIndex] &= static_cast<uint8_t>(~mask);
-  }
-}
 
 __attribute__((optimize("O3"))) void loop() {
   can_frame frame;
