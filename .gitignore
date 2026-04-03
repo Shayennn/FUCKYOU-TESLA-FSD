@@ -1,0 +1,46 @@
+# Compiled test binaries
+test/test_handlers
+
+# C/C++ compiled objects and binaries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.out
+*.d
+
+# Linker output
+*.elf
+*.hex
+*.bin
+*.map
+*.srec
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Arduino build artifacts
+build/
+*.ino.cpp
+*.ino.hex
+*.ino.elf
+*.ino.bin
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
