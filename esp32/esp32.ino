@@ -163,25 +163,18 @@ struct HW3Handler : public CarManagerBase {
       auto index = readMuxID(frame);
       bool rxFsdStops = isFSDSelectedInUI(frame);
       switch (index) {
-      case 0:
-        speedOffset = std::max(std::min(((uint8_t)((frame.data[3] >> 1) & 0x3F) - 30) * 5, 100), 0);
-        {
-          auto off = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
-          switch (off) {
-            case 2: speedProfile = 2; break;
-            case 1: speedProfile = 1; break;
-            case 0: speedProfile = 0; break;
-            default: break;
-          }
-        }
+      case 0: {
+        int rawOff = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
+        speedOffset = std::max(std::min(rawOff * 5, 100), 0);
         setBit(frame, 38, true);
         setBit(frame, 46, true);
         setSpeedProfileV12V13(frame, speedProfile);
         canSend(frame);
         if (enablePrint) {
-          Serial.printf("HW3Handler: fsdStops=%d->1 Profile: %d, Offset: %d\n", rxFsdStops, speedProfile, speedOffset);
+          Serial.printf("HW3Handler: fsdStops=%d->1 Profile: %d, Offset: %d (raw=%d)\n", rxFsdStops, speedProfile, speedOffset, rawOff);
         }
         break;
+      }
       case 1:
         setBit(frame, 19, false);
         canSend(frame);

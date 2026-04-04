@@ -122,23 +122,15 @@ struct HW3Handler : public CarManagerBase {
     case 1021: {
       auto index = readMuxID(frame);
       switch (index) {
-      case 0:
-        speedOffset = std::max(std::min(
-          ((uint8_t)((frame.data[3] >> 1) & 0x3F) - 30) * 5, 100), 0);
-        {
-          auto off = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
-          switch (off) {
-            case 2: speedProfile = 2; break;
-            case 1: speedProfile = 1; break;
-            case 0: speedProfile = 0; break;
-            default: break;
-          }
-        }
+      case 0: {
+        int rawOff = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
+        speedOffset = std::max(std::min(rawOff * 5, 100), 0);
         setBit(frame, 38, true);
         setBit(frame, 46, true);
         setSpeedProfileV12V13(frame, speedProfile);
         canSend(frame);
         break;
+      }
       case 1:
         setBit(frame, 19, false);
         canSend(frame);
@@ -412,6 +404,18 @@ void test_hw3_1021_mux0_sets_fsdStops_and_bit46() {
   ASSERT_TRUE(getBit(sentFrames[0], 46));
 }
 
+void test_hw3_1021_mux0_preserves_speedProfile_from_1016() {
+  HW3Handler h;
+  can_frame f1016 = makeFrame(1016, 0,0,0,0,0, 1u << 5);  // followDist=1 -> profile=2
+  h.handelMessage(f1016);
+  ASSERT_EQ(h.speedProfile, 2);
+  sentFrames.clear();
+  // data[3]=60 -> off=0 which USED to overwrite speedProfile to 0
+  can_frame f1021 = makeFrame(1021, 0x00, 0,0, 60);
+  h.handelMessage(f1021);
+  ASSERT_EQ(h.speedProfile, 2);   // must NOT be clobbered
+}
+
 void test_hw3_1021_mux0_runs_without_fsd_gate() {
   HW3Handler h;
   // bit 38 NOT set in input (fsdStops=0), handler should still process
@@ -544,6 +548,7 @@ int main() {
   RUN(test_hw3_1016_follow_distance_1);
   RUN(test_hw3_1016_follow_distance_3);
   RUN(test_hw3_1021_mux0_sets_fsdStops_and_bit46);
+  RUN(test_hw3_1021_mux0_preserves_speedProfile_from_1016);
   RUN(test_hw3_1021_mux0_runs_without_fsd_gate);
   RUN(test_hw3_1021_mux1_clears_eceR79);
   RUN(test_hw3_1021_mux2_writes_speed_offset);

@@ -111,7 +111,7 @@ struct LegacyHandler : public CarManagerBase {
           case 0: speedProfile = 0; break;
           default: break;
         }
-        setBit(frame, 46, true);
+        setBit(frame, 46, true);   // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
         setSpeedProfileV12V13(frame, speedProfile);
         canSend(frame);
 #ifdef ENABLE_PRINT
@@ -120,7 +120,7 @@ struct LegacyHandler : public CarManagerBase {
         break;
       }
       case 1:
-        setBit(frame, 19, false);
+        setBit(frame, 19, false);  // UI_applyEceR79: disable ECE R79 steering limit
         canSend(frame);
         break;
       }
@@ -158,8 +158,8 @@ struct HW3Handler : public CarManagerBase {
         case 3: speedProfile = 0; break;
         default: break;
       }
-      setBit(frame, 5, true);
-      setBit(frame, 14, true);
+      setBit(frame, 5, true);   // UI_dasDeveloper: enable developer mode
+      setBit(frame, 14, true);  // UI_handsOnRequirementDisable: suppress hands-on nag
       canSend(frame);
 #ifdef ENABLE_PRINT
       Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 followDist=%d\n", rxDasDev, rxHandsOff, followDistance);
@@ -170,30 +170,27 @@ struct HW3Handler : public CarManagerBase {
       auto index = readMuxID(frame);
       bool rxFsdStops = isFSDSelectedInUI(frame);
       switch (index) {
-      case 0:
-        speedOffset = std::max(std::min(((uint8_t)((frame.data[3] >> 1) & 0x3F) - 30) * 5, 100), 0);
-        {
-          auto off = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
-          switch (off) {
-            case 2: speedProfile = 2; break;
-            case 1: speedProfile = 1; break;
-            case 0: speedProfile = 0; break;
-            default: break;
-          }
-        }
-        setBit(frame, 38, true);
-        setBit(frame, 46, true);
+      case 0: {
+        int rawOff = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
+        speedOffset = std::max(std::min(rawOff * 5, 100), 0);
+        setBit(frame, 38, true);  // UI_fsdStopsControlEnabled: enable FSD stop control
+        setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
         setSpeedProfileV12V13(frame, speedProfile);
         canSend(frame);
 #ifdef ENABLE_PRINT
-        Serial.printf("HW3Handler: fsdStops=%d->1 Profile: %d, Offset: %d\n", rxFsdStops, speedProfile, speedOffset);
+        Serial.printf("HW3Handler: fsdStops=%d->1 Profile: %d, Offset: %d (raw=%d)\n", rxFsdStops, speedProfile, speedOffset, rawOff);
 #endif
         break;
+      }
       case 1:
+        // UI_applyEceR79 (bit 19): disable ECE R79 steering torque limit
         setBit(frame, 19, false);
         canSend(frame);
         break;
       case 2:
+        // AUTOPILOT_CONTROL_2: no signals defined in DBC for this mux page.
+        // Write speedOffset (0-100%) into undocumented 8-bit field at bits 6-13:
+        //   byte 0 bits 6-7 = low 2 bits, byte 1 bits 0-5 = high 6 bits.
         frame.data[0] &= ~(0b11000000);
         frame.data[1] &= ~(0b00111111);
         frame.data[0] |= (speedOffset & 0x03) << 6;
@@ -235,8 +232,8 @@ struct HW4Handler : public CarManagerBase {
         case 4: speedProfile = 0; break;
         case 5: speedProfile = 4; break;
       }
-      setBit(frame, 5, true);
-      setBit(frame, 14, true);
+      setBit(frame, 5, true);   // UI_dasDeveloper: enable developer mode
+      setBit(frame, 14, true);  // UI_handsOnRequirementDisable: suppress hands-on nag
       canSend(frame);
 #ifdef ENABLE_PRINT
       Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 followDist=%d\n", rxDasDev, rxHandsOff, fd);
@@ -248,20 +245,21 @@ struct HW4Handler : public CarManagerBase {
       bool rxFsdStops = isFSDSelectedInUI(frame);
       switch (index) {
       case 0:
-        setBit(frame, 38, true);
-        setBit(frame, 46, true);
-        setBit(frame, 60, true);
+        setBit(frame, 38, true);  // UI_fsdStopsControlEnabled: enable FSD stop control
+        setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
+        setBit(frame, 60, true);  // undocumented in 1021 m0 (UI_enableVisionOnlyStops on 1016)
         canSend(frame);
 #ifdef ENABLE_PRINT
         Serial.printf("HW4Handler: fsdStops=%d->1 profile: %d\n", rxFsdStops, speedProfile);
 #endif
         break;
       case 1:
-        setBit(frame, 19, false);
-        setBit(frame, 47, true);
+        setBit(frame, 19, false);  // UI_applyEceR79: disable ECE R79 steering limit
+        setBit(frame, 47, true);   // UI_hardCoreSummon: enable hardcore summon mode
         canSend(frame);
         break;
       case 2:
+        // AUTOPILOT_CONTROL_2: write speedProfile into undocumented 3-bit field at byte 7 bits 4-6
         frame.data[7] &= ~(0x07 << 4);
         frame.data[7] |= (speedProfile & 0x07) << 4;
         canSend(frame);
