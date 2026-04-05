@@ -116,6 +116,9 @@ struct HW3Handler : public CarManagerBase {
       }
       setBit(frame, 5, true);
       setBit(frame, 14, true);
+      setBit(frame, 13, true);
+      setBit(frame, 48, true);
+      setBit(frame, 49, true);
       canSend(frame);
       return true;
     }
@@ -133,6 +136,7 @@ struct HW3Handler : public CarManagerBase {
       }
       case 1:
         setBit(frame, 19, false);
+        setBit(frame, 43, false);
         canSend(frame);
         break;
       case 2:
@@ -173,6 +177,9 @@ struct HW4Handler : public CarManagerBase {
       }
       setBit(frame, 5, true);
       setBit(frame, 14, true);
+      setBit(frame, 13, true);
+      setBit(frame, 48, true);
+      setBit(frame, 49, true);
       canSend(frame);
       return true;
     }
@@ -187,6 +194,7 @@ struct HW4Handler : public CarManagerBase {
         break;
       case 1:
         setBit(frame, 19, false);
+        setBit(frame, 43, false);
         setBit(frame, 47, true);
         canSend(frame);
         break;
@@ -370,13 +378,16 @@ void test_hw3_unhandled_id_returns_false() {
   ASSERT_EQ((int)sentFrames.size(), 0);
 }
 
-void test_hw3_1016_enables_dasDev_and_handsOff() {
+void test_hw3_1016_enables_nav_on_maps_bits() {
   HW3Handler h;
   can_frame f = makeFrame(1016, 0,0,0,0,0, 2u << 5);  // followDist=2
   ASSERT_TRUE(h.handelMessage(f));
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_TRUE(getBit(sentFrames[0], 5));    // UI_dasDeveloper
   ASSERT_TRUE(getBit(sentFrames[0], 14));   // UI_handsOnRequirementDisable
+  ASSERT_TRUE(getBit(sentFrames[0], 13));   // UI_driveOnMapsEnable
+  ASSERT_TRUE(getBit(sentFrames[0], 48));   // UI_hasDriveOnNav
+  ASSERT_TRUE(getBit(sentFrames[0], 49));   // UI_followNavRouteEnable
   ASSERT_EQ(h.speedProfile, 1);            // followDist 2 -> profile 1
 }
 
@@ -430,9 +441,11 @@ void test_hw3_1021_mux1_clears_eceR79() {
   HW3Handler h;
   can_frame f = makeFrame(1021, 0x01);
   f.data[2] = 0xFF;
+  f.data[5] = 0x08;
   ASSERT_TRUE(h.handelMessage(f));
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_FALSE(getBit(sentFrames[0], 19));
+  ASSERT_FALSE(getBit(sentFrames[0], 43));
 }
 
 void test_hw3_1021_mux2_writes_speed_offset() {
@@ -464,13 +477,16 @@ void test_hw4_unhandled_id_returns_false() {
   ASSERT_EQ((int)sentFrames.size(), 0);
 }
 
-void test_hw4_1016_enables_dasDev_and_handsOff() {
+void test_hw4_1016_enables_nav_on_maps_bits() {
   HW4Handler h;
   can_frame f = makeFrame(1016, 0,0,0,0,0, 2u << 5);
   ASSERT_TRUE(h.handelMessage(f));
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_TRUE(getBit(sentFrames[0], 5));
   ASSERT_TRUE(getBit(sentFrames[0], 14));
+  ASSERT_TRUE(getBit(sentFrames[0], 13));
+  ASSERT_TRUE(getBit(sentFrames[0], 48));
+  ASSERT_TRUE(getBit(sentFrames[0], 49));
   ASSERT_EQ(h.speedProfile, 2);   // HW4: fd=2 -> profile=2
 }
 
@@ -501,9 +517,11 @@ void test_hw4_1021_mux1_clears_bit19_sets_bit47() {
   HW4Handler h;
   can_frame f = makeFrame(1021, 0x01);
   f.data[2] = 0xFF;
+  f.data[5] = 0x08;
   ASSERT_TRUE(h.handelMessage(f));
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_FALSE(getBit(sentFrames[0], 19));
+  ASSERT_FALSE(getBit(sentFrames[0], 43));
   ASSERT_TRUE(getBit(sentFrames[0], 47));
 }
 
@@ -544,7 +562,7 @@ int main() {
 
   printf("\n=== HW3Handler tests ===\n");
   RUN(test_hw3_unhandled_id_returns_false);
-  RUN(test_hw3_1016_enables_dasDev_and_handsOff);
+  RUN(test_hw3_1016_enables_nav_on_maps_bits);
   RUN(test_hw3_1016_follow_distance_1);
   RUN(test_hw3_1016_follow_distance_3);
   RUN(test_hw3_1021_mux0_sets_fsdStops_and_bit46);
@@ -556,7 +574,7 @@ int main() {
 
   printf("\n=== HW4Handler tests ===\n");
   RUN(test_hw4_unhandled_id_returns_false);
-  RUN(test_hw4_1016_enables_dasDev_and_handsOff);
+  RUN(test_hw4_1016_enables_nav_on_maps_bits);
   RUN(test_hw4_1016_follow_distance_mapping);
   RUN(test_hw4_1021_mux0_sets_bits_38_46_60);
   RUN(test_hw4_1021_mux1_clears_bit19_sets_bit47);

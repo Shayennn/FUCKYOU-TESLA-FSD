@@ -144,6 +144,9 @@ struct HW3Handler : public CarManagerBase {
     case 1016: {
       bool rxDasDev = (frame.data[0] >> 5) & 0x01;
       bool rxHandsOff = (frame.data[1] >> 6) & 0x01;
+      bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
+      bool rxHasDriveOnNav = frame.data[6] & 0x01;
+      bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
       uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
       switch (followDistance) {
         case 1: speedProfile = 2; break;
@@ -153,9 +156,13 @@ struct HW3Handler : public CarManagerBase {
       }
       setBit(frame, 5, true);
       setBit(frame, 14, true);
+      setBit(frame, 13, true);
+      setBit(frame, 48, true);
+      setBit(frame, 49, true);
       canSend(frame);
       if (enablePrint) {
-        Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 followDist=%d\n", rxDasDev, rxHandsOff, followDistance);
+        Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+                      rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, followDistance);
       }
       return;
     }
@@ -211,6 +218,9 @@ struct HW4Handler : public CarManagerBase {
     case 1016: {
       bool rxDasDev = (frame.data[0] >> 5) & 0x01;
       bool rxHandsOff = (frame.data[1] >> 6) & 0x01;
+      bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
+      bool rxHasDriveOnNav = frame.data[6] & 0x01;
+      bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
       auto fd = (frame.data[5] & 0b11100000) >> 5;
       switch (fd) {
         case 1: speedProfile = 3; break;
@@ -221,9 +231,13 @@ struct HW4Handler : public CarManagerBase {
       }
       setBit(frame, 5, true);
       setBit(frame, 14, true);
+      setBit(frame, 13, true);
+      setBit(frame, 48, true);
+      setBit(frame, 49, true);
       canSend(frame);
       if (enablePrint) {
-        Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 followDist=%d\n", rxDasDev, rxHandsOff, fd);
+        Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+                      rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, fd);
       }
       return;
     }
