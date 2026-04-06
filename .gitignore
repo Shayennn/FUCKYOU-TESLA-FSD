@@ -1,5 +1,6 @@
 # Compiled test binaries
 test/test_handlers
+test/test_flood_logic
 
 # C/C++ compiled objects and binaries
 *.o
