@@ -34,8 +34,33 @@ const uint32_t COLOR_BLUE   = Adafruit_NeoPixel::Color(0, 0, 255);
 const uint32_t COLOR_YELLOW = Adafruit_NeoPixel::Color(255, 255, 0);
 
 constexpr uint32_t UI_VEHICLE_CONTROL_ID = 627;
+constexpr uint32_t UI_CHASSIS_CONTROL_ID = 659;
+constexpr uint32_t UI_DRIVER_ASSIST_CONTROL_ID = 1016;
+constexpr uint32_t UI_AUTOPILOT_CONTROL_ID = 1021;
 constexpr int UI_DOME_LIGHT_SWITCH_BIT = 59;
 constexpr int UI_DOME_LIGHT_SWITCH_LEN = 2;
+constexpr int UI_DRIVER_SIDE_BIT = 40;
+constexpr int UI_DRIVER_SIDE_LEN = 2;
+constexpr int UI_APMV3_BRANCH_BIT = 40;
+constexpr int UI_APMV3_BRANCH_LEN = 3;
+constexpr int UI_AUTO_LANE_CHANGE_ENABLE_BIT = 24;
+constexpr int UI_AUTO_LANE_CHANGE_ENABLE_LEN = 2;
+constexpr uint8_t UI_APMV3_BRANCH_MUX = 1;
+constexpr uint8_t UI_DRIVER_SIDE_LEFT = 0;
+constexpr uint8_t UI_DRIVER_SIDE_RIGHT = 1;
+constexpr uint8_t UI_DRIVER_SIDE_UNKNOWN = 2;
+constexpr uint8_t UI_DRIVER_SIDE_OVERRIDE = UI_DRIVER_SIDE_RIGHT;
+constexpr uint8_t UI_APMV3_BRANCH_LIVE = 0;
+constexpr uint8_t UI_APMV3_BRANCH_STAGE = 1;
+constexpr uint8_t UI_APMV3_BRANCH_DEV = 2;
+constexpr uint8_t UI_APMV3_BRANCH_STAGE2 = 3;
+constexpr uint8_t UI_APMV3_BRANCH_EAP = 4;
+constexpr uint8_t UI_APMV3_BRANCH_DEMO = 5;
+constexpr uint8_t UI_APMV3_BRANCH_OVERRIDE = UI_APMV3_BRANCH_DEV;
+constexpr uint8_t UI_AUTO_LANE_CHANGE_ENABLE_OFF = 0;
+constexpr uint8_t UI_AUTO_LANE_CHANGE_ENABLE_ON = 1;
+constexpr uint8_t UI_AUTO_LANE_CHANGE_ENABLE_SNA = 3;
+constexpr uint8_t UI_AUTO_LANE_CHANGE_ENABLE_OVERRIDE = UI_AUTO_LANE_CHANGE_ENABLE_OFF;
 constexpr uint8_t UI_DOME_LIGHT_SWITCH_OFF = 0;
 constexpr uint8_t UI_DOME_LIGHT_SWITCH_ON = 1;
 constexpr uint8_t UI_DOME_LIGHT_SWITCH_AUTO = 2;
@@ -177,6 +202,75 @@ inline void setDomeLightSwitch(can_frame& frame, uint8_t value) {
   setField(frame, UI_DOME_LIGHT_SWITCH_BIT, UI_DOME_LIGHT_SWITCH_LEN, value);
 }
 
+inline uint8_t readDriverSide(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_DRIVER_SIDE_BIT, UI_DRIVER_SIDE_LEN));
+}
+
+inline uint8_t readApmv3Branch(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN));
+}
+
+inline void setDriverSide(can_frame& frame, uint8_t value) {
+  setField(frame, UI_DRIVER_SIDE_BIT, UI_DRIVER_SIDE_LEN, value);
+}
+
+inline void setApmv3Branch(can_frame& frame, uint8_t value) {
+  setField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN, value);
+}
+
+inline uint8_t readAutoLaneChangeEnable(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_AUTO_LANE_CHANGE_ENABLE_BIT, UI_AUTO_LANE_CHANGE_ENABLE_LEN));
+}
+
+inline void setAutoLaneChangeEnable(can_frame& frame, uint8_t value) {
+  setField(frame, UI_AUTO_LANE_CHANGE_ENABLE_BIT, UI_AUTO_LANE_CHANGE_ENABLE_LEN, value);
+}
+
+const char* driverSideName(uint8_t value) {
+  switch (value) {
+  case UI_DRIVER_SIDE_LEFT: return "LEFT";
+  case UI_DRIVER_SIDE_RIGHT: return "RIGHT";
+  case UI_DRIVER_SIDE_UNKNOWN: return "UNKNOWN";
+  default: return "INVALID";
+  }
+}
+
+const char* apmv3BranchName(uint8_t value) {
+  switch (value) {
+  case UI_APMV3_BRANCH_LIVE: return "LIVE";
+  case UI_APMV3_BRANCH_STAGE: return "STAGE";
+  case UI_APMV3_BRANCH_DEV: return "DEV";
+  case UI_APMV3_BRANCH_STAGE2: return "STAGE2";
+  case UI_APMV3_BRANCH_EAP: return "EAP";
+  case UI_APMV3_BRANCH_DEMO: return "DEMO";
+  default: return "INVALID";
+  }
+}
+
+const char* autoLaneChangeEnableName(uint8_t value) {
+  switch (value) {
+  case UI_AUTO_LANE_CHANGE_ENABLE_OFF: return "OFF";
+  case UI_AUTO_LANE_CHANGE_ENABLE_ON: return "ON";
+  case UI_AUTO_LANE_CHANGE_ENABLE_SNA: return "SNA";
+  default: return "INVALID";
+  }
+}
+
+bool handleCommonUiChassisControl(can_frame& frame) {
+  if (frame.can_id != UI_CHASSIS_CONTROL_ID) return false;
+
+  uint8_t rxAutoLaneChangeEnable = readAutoLaneChangeEnable(frame);
+  setAutoLaneChangeEnable(frame, UI_AUTO_LANE_CHANGE_ENABLE_OVERRIDE);
+  canSend(frame);
+#ifdef ENABLE_PRINT
+  Serial.printf("ID659: autoLaneChange=%u (%s)->%u (%s)\n",
+                rxAutoLaneChangeEnable, autoLaneChangeEnableName(rxAutoLaneChangeEnable),
+                UI_AUTO_LANE_CHANGE_ENABLE_OVERRIDE,
+                autoLaneChangeEnableName(UI_AUTO_LANE_CHANGE_ENABLE_OVERRIDE));
+#endif
+  return true;
+}
+
 struct StartupSignal {
   bool active = true;
   bool hasTemplate = false;
@@ -250,6 +344,8 @@ struct StartupSignal {
 
 struct LegacyHandler : public CarManagerBase {
   virtual bool handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return true;
+
     switch (frame.can_id) {
     case 1006: {
       switch (readMuxID(frame)) {
@@ -297,6 +393,8 @@ struct LegacyHandler : public CarManagerBase {
 struct HW3Handler : public CarManagerBase {
   int speedOffset = 0;
   virtual bool handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return true;
+
     switch (frame.can_id) {
     case 1016: {
       bool rxDasDev = (frame.data[0] >> 5) & 0x01;
@@ -304,6 +402,7 @@ struct HW3Handler : public CarManagerBase {
       bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
       bool rxHasDriveOnNav = frame.data[6] & 0x01;
       bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
+      uint8_t rxDriverSide = readDriverSide(frame);
       uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
       switch (followDistance) {
         case 1: speedProfile = 2; break;
@@ -316,9 +415,12 @@ struct HW3Handler : public CarManagerBase {
       setBit(frame, 13, true);  // UI_driveOnMapsEnable: enable navigation on maps
       setBit(frame, 48, true);  // UI_hasDriveOnNav: advertise nav-on-autopilot availability
       setBit(frame, 49, true);  // UI_followNavRouteEnable: follow active navigation route
+      setDriverSide(frame, UI_DRIVER_SIDE_OVERRIDE);
       canSend(frame);
 #ifdef ENABLE_PRINT
-      Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+      Serial.printf("ID1016: driverSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+                    rxDriverSide, driverSideName(rxDriverSide),
+                    UI_DRIVER_SIDE_OVERRIDE, driverSideName(UI_DRIVER_SIDE_OVERRIDE),
                     rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, followDistance);
 #endif
       return true;
@@ -339,12 +441,20 @@ struct HW3Handler : public CarManagerBase {
 #endif
         break;
       }
-      case 1:
+      case 1: {
+        uint8_t rxApmv3Branch = readApmv3Branch(frame);
         // UI_applyEceR79 (bit 19): disable ECE R79 steering torque limit
+        setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
         setBit(frame, 19, false);
         setBit(frame, 43, false);  // UI_enableCabinCamera: keep cabin camera disabled
         canSend(frame);
+#ifdef ENABLE_PRINT
+        Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
+                      rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
+                      UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
+#endif
         break;
+      }
       case 2:
         // AUTOPILOT_CONTROL_2: no signals defined in DBC for this mux page.
         // Write speedOffset (0-100%) into undocumented 8-bit field at bits 6-13:
@@ -378,6 +488,8 @@ struct HW3Handler : public CarManagerBase {
 
 struct HW4Handler : public CarManagerBase {
   virtual bool handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return true;
+
     switch (frame.can_id) {
     case 1016: {
       bool rxDasDev = (frame.data[0] >> 5) & 0x01;
@@ -385,6 +497,7 @@ struct HW4Handler : public CarManagerBase {
       bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
       bool rxHasDriveOnNav = frame.data[6] & 0x01;
       bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
+      uint8_t rxDriverSide = readDriverSide(frame);
       auto fd = (frame.data[5] & 0b11100000) >> 5;
       switch (fd) {
         case 1: speedProfile = 3; break;
@@ -398,9 +511,12 @@ struct HW4Handler : public CarManagerBase {
       setBit(frame, 13, true);  // UI_driveOnMapsEnable: enable navigation on maps
       setBit(frame, 48, true);  // UI_hasDriveOnNav: advertise nav-on-autopilot availability
       setBit(frame, 49, true);  // UI_followNavRouteEnable: follow active navigation route
+      setDriverSide(frame, UI_DRIVER_SIDE_OVERRIDE);
       canSend(frame);
 #ifdef ENABLE_PRINT
-      Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+      Serial.printf("ID1016: driverSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+                    rxDriverSide, driverSideName(rxDriverSide),
+                    UI_DRIVER_SIDE_OVERRIDE, driverSideName(UI_DRIVER_SIDE_OVERRIDE),
                     rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, fd);
 #endif
       return true;
@@ -418,12 +534,20 @@ struct HW4Handler : public CarManagerBase {
         Serial.printf("HW4Handler: fsdStops=%d->1 profile: %d\n", rxFsdStops, speedProfile);
 #endif
         break;
-      case 1:
+      case 1: {
+        uint8_t rxApmv3Branch = readApmv3Branch(frame);
+        setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
         setBit(frame, 19, false);  // UI_applyEceR79: disable ECE R79 steering limit
         setBit(frame, 43, false);  // UI_enableCabinCamera: keep cabin camera disabled
         setBit(frame, 47, true);   // UI_hardCoreSummon: enable hardcore summon mode
         canSend(frame);
+#ifdef ENABLE_PRINT
+        Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
+                      rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
+                      UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
+#endif
         break;
+      }
       case 2:
         // AUTOPILOT_CONTROL_2: write speedProfile into undocumented 3-bit field at byte 7 bits 4-6
         frame.data[7] &= ~(0x07 << 4);

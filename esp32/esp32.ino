@@ -13,6 +13,8 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <algorithm>
+#include <cstring>
 #include <memory>
 #include <driver/twai.h>
 
@@ -25,6 +27,31 @@ struct can_frame {
 #define LED_PIN    2
 #define CAN_RX_PIN GPIO_NUM_27
 #define CAN_TX_PIN GPIO_NUM_26
+#define UI_CHASSIS_CONTROL_ID 659
+#define UI_DRIVER_ASSIST_CONTROL_ID 1016
+#define UI_AUTOPILOT_CONTROL_ID 1021
+#define UI_DRIVER_SIDE_BIT 40
+#define UI_DRIVER_SIDE_LEN 2
+#define UI_APMV3_BRANCH_BIT 40
+#define UI_APMV3_BRANCH_LEN 3
+#define UI_AUTO_LANE_CHANGE_ENABLE_BIT 24
+#define UI_AUTO_LANE_CHANGE_ENABLE_LEN 2
+#define UI_APMV3_BRANCH_MUX 1
+#define UI_DRIVER_SIDE_LEFT 0
+#define UI_DRIVER_SIDE_RIGHT 1
+#define UI_DRIVER_SIDE_UNKNOWN 2
+#define UI_DRIVER_SIDE_OVERRIDE UI_DRIVER_SIDE_RIGHT
+#define UI_APMV3_BRANCH_LIVE 0
+#define UI_APMV3_BRANCH_STAGE 1
+#define UI_APMV3_BRANCH_DEV 2
+#define UI_APMV3_BRANCH_STAGE2 3
+#define UI_APMV3_BRANCH_EAP 4
+#define UI_APMV3_BRANCH_DEMO 5
+#define UI_APMV3_BRANCH_OVERRIDE UI_APMV3_BRANCH_DEV
+#define UI_AUTO_LANE_CHANGE_ENABLE_OFF 0
+#define UI_AUTO_LANE_CHANGE_ENABLE_ON 1
+#define UI_AUTO_LANE_CHANGE_ENABLE_SNA 3
+#define UI_AUTO_LANE_CHANGE_ENABLE_OVERRIDE UI_AUTO_LANE_CHANGE_ENABLE_OFF
 
 bool canInit() {
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_NORMAL);
@@ -92,9 +119,98 @@ inline void setBit(can_frame& frame, int bit, bool value) {
   }
 }
 
+inline uint32_t readField(const can_frame& frame, int startBit, int length) {
+  uint32_t value = 0;
+  for (int i = 0; i < length; ++i) {
+    const int absoluteBit = startBit + i;
+    const int byteIndex = absoluteBit / 8;
+    const int bitIndex = absoluteBit % 8;
+    if ((frame.data[byteIndex] >> bitIndex) & 0x01) {
+      value |= (1UL << i);
+    }
+  }
+  return value;
+}
+
+inline uint8_t readDriverSide(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_DRIVER_SIDE_BIT, UI_DRIVER_SIDE_LEN));
+}
+
+inline uint8_t readApmv3Branch(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN));
+}
+
+inline void setField(can_frame& frame, int startBit, int length, uint32_t value) {
+  for (int i = 0; i < length; ++i) {
+    setBit(frame, startBit + i, (value >> i) & 0x01);
+  }
+}
+
+inline void setDriverSide(can_frame& frame, uint8_t value) {
+  setField(frame, UI_DRIVER_SIDE_BIT, UI_DRIVER_SIDE_LEN, value);
+}
+
+inline void setApmv3Branch(can_frame& frame, uint8_t value) {
+  setField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN, value);
+}
+
+inline uint8_t readAutoLaneChangeEnable(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_AUTO_LANE_CHANGE_ENABLE_BIT, UI_AUTO_LANE_CHANGE_ENABLE_LEN));
+}
+
+inline void setAutoLaneChangeEnable(can_frame& frame, uint8_t value) {
+  setField(frame, UI_AUTO_LANE_CHANGE_ENABLE_BIT, UI_AUTO_LANE_CHANGE_ENABLE_LEN, value);
+}
+
+const char* driverSideName(uint8_t value) {
+  switch (value) {
+    case UI_DRIVER_SIDE_LEFT: return "LEFT";
+    case UI_DRIVER_SIDE_RIGHT: return "RIGHT";
+    case UI_DRIVER_SIDE_UNKNOWN: return "UNKNOWN";
+    default: return "INVALID";
+  }
+}
+
+const char* apmv3BranchName(uint8_t value) {
+  switch (value) {
+    case UI_APMV3_BRANCH_LIVE: return "LIVE";
+    case UI_APMV3_BRANCH_STAGE: return "STAGE";
+    case UI_APMV3_BRANCH_DEV: return "DEV";
+    case UI_APMV3_BRANCH_STAGE2: return "STAGE2";
+    case UI_APMV3_BRANCH_EAP: return "EAP";
+    case UI_APMV3_BRANCH_DEMO: return "DEMO";
+    default: return "INVALID";
+  }
+}
+
+const char* autoLaneChangeEnableName(uint8_t value) {
+  switch (value) {
+    case UI_AUTO_LANE_CHANGE_ENABLE_OFF: return "OFF";
+    case UI_AUTO_LANE_CHANGE_ENABLE_ON: return "ON";
+    case UI_AUTO_LANE_CHANGE_ENABLE_SNA: return "SNA";
+    default: return "INVALID";
+  }
+}
+
+bool handleCommonUiChassisControl(can_frame& frame) {
+  if (frame.can_id != UI_CHASSIS_CONTROL_ID) return false;
+
+  uint8_t rxAutoLaneChangeEnable = readAutoLaneChangeEnable(frame);
+  setAutoLaneChangeEnable(frame, UI_AUTO_LANE_CHANGE_ENABLE_OVERRIDE);
+  canSend(frame);
+  if (enablePrint) {
+    Serial.printf("ID659: autoLaneChange=%u (%s)->%u (%s)\n",
+                  rxAutoLaneChangeEnable, autoLaneChangeEnableName(rxAutoLaneChangeEnable),
+                  UI_AUTO_LANE_CHANGE_ENABLE_OVERRIDE,
+                  autoLaneChangeEnableName(UI_AUTO_LANE_CHANGE_ENABLE_OVERRIDE));
+  }
+  return true;
+}
 
 struct LegacyHandler : public CarManagerBase {
   virtual void handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return;
+
     switch (frame.can_id) {
     case 1006: {
       switch (readMuxID(frame)) {
@@ -140,6 +256,8 @@ struct LegacyHandler : public CarManagerBase {
 struct HW3Handler : public CarManagerBase {
   int speedOffset = 0;
   virtual void handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return;
+
     switch (frame.can_id) {
     case 1016: {
       bool rxDasDev = (frame.data[0] >> 5) & 0x01;
@@ -147,6 +265,7 @@ struct HW3Handler : public CarManagerBase {
       bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
       bool rxHasDriveOnNav = frame.data[6] & 0x01;
       bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
+      uint8_t rxDriverSide = readDriverSide(frame);
       uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
       switch (followDistance) {
         case 1: speedProfile = 2; break;
@@ -159,9 +278,12 @@ struct HW3Handler : public CarManagerBase {
       setBit(frame, 13, true);
       setBit(frame, 48, true);
       setBit(frame, 49, true);
+      setDriverSide(frame, UI_DRIVER_SIDE_OVERRIDE);
       canSend(frame);
       if (enablePrint) {
-        Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+        Serial.printf("ID1016: driverSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+                      rxDriverSide, driverSideName(rxDriverSide),
+                      UI_DRIVER_SIDE_OVERRIDE, driverSideName(UI_DRIVER_SIDE_OVERRIDE),
                       rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, followDistance);
       }
       return;
@@ -182,10 +304,18 @@ struct HW3Handler : public CarManagerBase {
         }
         break;
       }
-      case 1:
+      case 1: {
+        uint8_t rxApmv3Branch = readApmv3Branch(frame);
+        setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
         setBit(frame, 19, false);
         canSend(frame);
+        if (enablePrint) {
+          Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
+                        rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
+                        UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
+        }
         break;
+      }
       case 2:
         frame.data[0] &= ~(0b11000000);
         frame.data[1] &= ~(0b00111111);
@@ -214,6 +344,8 @@ struct HW3Handler : public CarManagerBase {
 
 struct HW4Handler : public CarManagerBase {
   virtual void handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return;
+
     switch (frame.can_id) {
     case 1016: {
       bool rxDasDev = (frame.data[0] >> 5) & 0x01;
@@ -221,6 +353,7 @@ struct HW4Handler : public CarManagerBase {
       bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
       bool rxHasDriveOnNav = frame.data[6] & 0x01;
       bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
+      uint8_t rxDriverSide = readDriverSide(frame);
       auto fd = (frame.data[5] & 0b11100000) >> 5;
       switch (fd) {
         case 1: speedProfile = 3; break;
@@ -234,9 +367,12 @@ struct HW4Handler : public CarManagerBase {
       setBit(frame, 13, true);
       setBit(frame, 48, true);
       setBit(frame, 49, true);
+      setDriverSide(frame, UI_DRIVER_SIDE_OVERRIDE);
       canSend(frame);
       if (enablePrint) {
-        Serial.printf("ID1016: dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+        Serial.printf("ID1016: driverSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+                      rxDriverSide, driverSideName(rxDriverSide),
+                      UI_DRIVER_SIDE_OVERRIDE, driverSideName(UI_DRIVER_SIDE_OVERRIDE),
                       rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, fd);
       }
       return;
@@ -254,11 +390,19 @@ struct HW4Handler : public CarManagerBase {
           Serial.printf("HW4Handler: fsdStops=%d->1 profile: %d\n", rxFsdStops, speedProfile);
         }
         break;
-      case 1:
+      case 1: {
+        uint8_t rxApmv3Branch = readApmv3Branch(frame);
+        setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
         setBit(frame, 19, false);
         setBit(frame, 47, true);
         canSend(frame);
+        if (enablePrint) {
+          Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
+                        rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
+                        UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
+        }
         break;
+      }
       case 2:
         frame.data[7] &= ~(0x07 << 4);
         frame.data[7] |= (speedProfile & 0x07) << 4;

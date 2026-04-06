@@ -23,6 +23,17 @@ struct can_frame {
 
 static std::vector<can_frame> sentFrames;
 
+constexpr uint32_t UI_CHASSIS_CONTROL_ID = 659;
+constexpr int UI_DRIVER_SIDE_BIT = 40;
+constexpr int UI_DRIVER_SIDE_LEN = 2;
+constexpr int UI_APMV3_BRANCH_BIT = 40;
+constexpr int UI_APMV3_BRANCH_LEN = 3;
+constexpr int UI_AUTO_LANE_CHANGE_ENABLE_BIT = 24;
+constexpr int UI_AUTO_LANE_CHANGE_ENABLE_LEN = 2;
+constexpr uint8_t UI_DRIVER_SIDE_RIGHT = 1;
+constexpr uint8_t UI_APMV3_BRANCH_DEV = 2;
+constexpr uint8_t UI_AUTO_LANE_CHANGE_ENABLE_OFF = 0;
+
 void canSend(can_frame& frame) {
   sentFrames.push_back(frame);
 }
@@ -55,6 +66,56 @@ inline void setBit(can_frame& frame, int bit, bool value) {
   }
 }
 
+inline uint32_t readField(const can_frame& frame, int startBit, int length) {
+  uint32_t value = 0;
+  for (int i = 0; i < length; ++i) {
+    const int absoluteBit = startBit + i;
+    const int byteIndex = absoluteBit / 8;
+    const int bitIndex = absoluteBit % 8;
+    if ((frame.data[byteIndex] >> bitIndex) & 0x01) {
+      value |= (1UL << i);
+    }
+  }
+  return value;
+}
+
+inline uint8_t readDriverSide(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_DRIVER_SIDE_BIT, UI_DRIVER_SIDE_LEN));
+}
+
+inline uint8_t readApmv3Branch(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN));
+}
+
+inline void setField(can_frame& frame, int startBit, int length, uint32_t value) {
+  for (int i = 0; i < length; ++i) {
+    setBit(frame, startBit + i, (value >> i) & 0x01);
+  }
+}
+
+inline void setDriverSide(can_frame& frame, uint8_t value) {
+  setField(frame, UI_DRIVER_SIDE_BIT, UI_DRIVER_SIDE_LEN, value);
+}
+
+inline void setApmv3Branch(can_frame& frame, uint8_t value) {
+  setField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN, value);
+}
+
+inline uint8_t readAutoLaneChangeEnable(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_AUTO_LANE_CHANGE_ENABLE_BIT, UI_AUTO_LANE_CHANGE_ENABLE_LEN));
+}
+
+inline void setAutoLaneChangeEnable(can_frame& frame, uint8_t value) {
+  setField(frame, UI_AUTO_LANE_CHANGE_ENABLE_BIT, UI_AUTO_LANE_CHANGE_ENABLE_LEN, value);
+}
+
+inline bool handleCommonUiChassisControl(can_frame& frame) {
+  if (frame.can_id != UI_CHASSIS_CONTROL_ID) return false;
+  setAutoLaneChangeEnable(frame, UI_AUTO_LANE_CHANGE_ENABLE_OFF);
+  canSend(frame);
+  return true;
+}
+
 struct CarManagerBase {
   int speedProfile = 1;
   virtual bool handelMessage(can_frame& frame) = 0;
@@ -65,6 +126,8 @@ struct CarManagerBase {
 
 struct LegacyHandler : public CarManagerBase {
   bool handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return true;
+
     switch (frame.can_id) {
     case 1006: {
       switch (readMuxID(frame)) {
@@ -105,6 +168,8 @@ struct LegacyHandler : public CarManagerBase {
 struct HW3Handler : public CarManagerBase {
   int speedOffset = 0;
   bool handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return true;
+
     switch (frame.can_id) {
     case 1016: {
       uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
@@ -119,6 +184,7 @@ struct HW3Handler : public CarManagerBase {
       setBit(frame, 13, true);
       setBit(frame, 48, true);
       setBit(frame, 49, true);
+      setDriverSide(frame, UI_DRIVER_SIDE_RIGHT);
       canSend(frame);
       return true;
     }
@@ -135,6 +201,7 @@ struct HW3Handler : public CarManagerBase {
         break;
       }
       case 1:
+        setApmv3Branch(frame, UI_APMV3_BRANCH_DEV);
         setBit(frame, 19, false);
         setBit(frame, 43, false);
         canSend(frame);
@@ -165,6 +232,8 @@ struct HW3Handler : public CarManagerBase {
 
 struct HW4Handler : public CarManagerBase {
   bool handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return true;
+
     switch (frame.can_id) {
     case 1016: {
       auto fd = (frame.data[5] & 0b11100000) >> 5;
@@ -180,6 +249,7 @@ struct HW4Handler : public CarManagerBase {
       setBit(frame, 13, true);
       setBit(frame, 48, true);
       setBit(frame, 49, true);
+      setDriverSide(frame, UI_DRIVER_SIDE_RIGHT);
       canSend(frame);
       return true;
     }
@@ -193,6 +263,7 @@ struct HW4Handler : public CarManagerBase {
         canSend(frame);
         break;
       case 1:
+        setApmv3Branch(frame, UI_APMV3_BRANCH_DEV);
         setBit(frame, 19, false);
         setBit(frame, 43, false);
         setBit(frame, 47, true);
@@ -328,6 +399,24 @@ void test_setSpeedProfileV12V13_writes_bits_1_2() {
   ASSERT_EQ(f.data[6] & 0x06, 0x00);
 }
 
+void test_readDriverSide_extracts_bits_40_41() {
+  can_frame f = makeFrame(1016, 0, 0, 0, 0, 0, 0x02);
+  ASSERT_EQ(readDriverSide(f), 2);
+  f.data[5] = 0x01;
+  ASSERT_EQ(readDriverSide(f), 1);
+  f.data[5] = 0x00;
+  ASSERT_EQ(readDriverSide(f), 0);
+}
+
+void test_readApmv3Branch_extracts_bits_40_42() {
+  can_frame f = makeFrame(1021, 0x01, 0, 0, 0, 0, 0x05);
+  ASSERT_EQ(readApmv3Branch(f), 5);
+  f.data[5] = 0x03;
+  ASSERT_EQ(readApmv3Branch(f), 3);
+  f.data[5] = 0x00;
+  ASSERT_EQ(readApmv3Branch(f), 0);
+}
+
 // ============================================================
 // LegacyHandler tests
 // ============================================================
@@ -367,6 +456,15 @@ void test_legacy_2047_sets_autopilot_to_3() {
   ASSERT_EQ(getField(sentFrames[0], 42, 3), 3);
 }
 
+void test_legacy_659_disables_auto_lane_change() {
+  LegacyHandler h;
+  can_frame f = makeFrame(659);
+  f.data[3] = 0x03;
+  ASSERT_TRUE(h.handelMessage(f));
+  ASSERT_EQ((int)sentFrames.size(), 1);
+  ASSERT_EQ(readAutoLaneChangeEnable(sentFrames[0]), UI_AUTO_LANE_CHANGE_ENABLE_OFF);
+}
+
 // ============================================================
 // HW3Handler tests
 // ============================================================
@@ -388,6 +486,7 @@ void test_hw3_1016_enables_nav_on_maps_bits() {
   ASSERT_TRUE(getBit(sentFrames[0], 13));   // UI_driveOnMapsEnable
   ASSERT_TRUE(getBit(sentFrames[0], 48));   // UI_hasDriveOnNav
   ASSERT_TRUE(getBit(sentFrames[0], 49));   // UI_followNavRouteEnable
+  ASSERT_EQ(readDriverSide(sentFrames[0]), UI_DRIVER_SIDE_RIGHT);
   ASSERT_EQ(h.speedProfile, 1);            // followDist 2 -> profile 1
 }
 
@@ -446,6 +545,7 @@ void test_hw3_1021_mux1_clears_eceR79() {
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_FALSE(getBit(sentFrames[0], 19));
   ASSERT_FALSE(getBit(sentFrames[0], 43));
+  ASSERT_EQ(readApmv3Branch(sentFrames[0]), UI_APMV3_BRANCH_DEV);
 }
 
 void test_hw3_1021_mux2_writes_speed_offset() {
@@ -464,6 +564,15 @@ void test_hw3_2047_sets_autopilot_to_3() {
   can_frame f = makeFrame(2047, 2, 0,0,0,0, 0xFF);
   ASSERT_TRUE(h.handelMessage(f));
   ASSERT_EQ(getField(sentFrames[0], 42, 3), 3);
+}
+
+void test_hw3_659_disables_auto_lane_change() {
+  HW3Handler h;
+  can_frame f = makeFrame(659);
+  f.data[3] = 0x03;
+  ASSERT_TRUE(h.handelMessage(f));
+  ASSERT_EQ((int)sentFrames.size(), 1);
+  ASSERT_EQ(readAutoLaneChangeEnable(sentFrames[0]), UI_AUTO_LANE_CHANGE_ENABLE_OFF);
 }
 
 // ============================================================
@@ -487,6 +596,7 @@ void test_hw4_1016_enables_nav_on_maps_bits() {
   ASSERT_TRUE(getBit(sentFrames[0], 13));
   ASSERT_TRUE(getBit(sentFrames[0], 48));
   ASSERT_TRUE(getBit(sentFrames[0], 49));
+  ASSERT_EQ(readDriverSide(sentFrames[0]), UI_DRIVER_SIDE_RIGHT);
   ASSERT_EQ(h.speedProfile, 2);   // HW4: fd=2 -> profile=2
 }
 
@@ -523,6 +633,7 @@ void test_hw4_1021_mux1_clears_bit19_sets_bit47() {
   ASSERT_FALSE(getBit(sentFrames[0], 19));
   ASSERT_FALSE(getBit(sentFrames[0], 43));
   ASSERT_TRUE(getBit(sentFrames[0], 47));
+  ASSERT_EQ(readApmv3Branch(sentFrames[0]), UI_APMV3_BRANCH_DEV);
 }
 
 void test_hw4_1021_mux2_writes_speed_profile() {
@@ -541,6 +652,15 @@ void test_hw4_2047_sets_autopilot_to_4() {
   ASSERT_EQ(getField(sentFrames[0], 42, 3), 4);
 }
 
+void test_hw4_659_disables_auto_lane_change() {
+  HW4Handler h;
+  can_frame f = makeFrame(659);
+  f.data[3] = 0x03;
+  ASSERT_TRUE(h.handelMessage(f));
+  ASSERT_EQ((int)sentFrames.size(), 1);
+  ASSERT_EQ(readAutoLaneChangeEnable(sentFrames[0]), UI_AUTO_LANE_CHANGE_ENABLE_OFF);
+}
+
 // ============================================================
 // Main
 // ============================================================
@@ -553,12 +673,15 @@ int main() {
   RUN(test_readMuxID_extracts_lower_3_bits);
   RUN(test_isFSDSelectedInUI_reads_bit38);
   RUN(test_setSpeedProfileV12V13_writes_bits_1_2);
+  RUN(test_readDriverSide_extracts_bits_40_41);
+  RUN(test_readApmv3Branch_extracts_bits_40_42);
 
   printf("\n=== LegacyHandler tests ===\n");
   RUN(test_legacy_unhandled_id_returns_false);
   RUN(test_legacy_1006_mux0_sets_bit46_and_speed_profile);
   RUN(test_legacy_1006_mux1_clears_eceR79);
   RUN(test_legacy_2047_sets_autopilot_to_3);
+  RUN(test_legacy_659_disables_auto_lane_change);
 
   printf("\n=== HW3Handler tests ===\n");
   RUN(test_hw3_unhandled_id_returns_false);
@@ -571,6 +694,7 @@ int main() {
   RUN(test_hw3_1021_mux1_clears_eceR79);
   RUN(test_hw3_1021_mux2_writes_speed_offset);
   RUN(test_hw3_2047_sets_autopilot_to_3);
+  RUN(test_hw3_659_disables_auto_lane_change);
 
   printf("\n=== HW4Handler tests ===\n");
   RUN(test_hw4_unhandled_id_returns_false);
@@ -580,6 +704,7 @@ int main() {
   RUN(test_hw4_1021_mux1_clears_bit19_sets_bit47);
   RUN(test_hw4_1021_mux2_writes_speed_profile);
   RUN(test_hw4_2047_sets_autopilot_to_4);
+  RUN(test_hw4_659_disables_auto_lane_change);
 
   printf("\n========================================\n");
   printf("Results: %d passed, %d failed\n", testsPassed, testsFailed);

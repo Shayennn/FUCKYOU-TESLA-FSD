@@ -43,8 +43,18 @@ struct FloodSlot {
   uint32_t last_flood_log_us = 0;
 };
 
-static constexpr size_t kFloodSlotCount = 5;
+static constexpr size_t kFloodSlotCount = 8;
 static constexpr uint32_t kFloodRateMultiplier = 100;
+static constexpr uint32_t UI_CHASSIS_CONTROL_ID = 659;
+static constexpr int UI_DRIVER_SIDE_BIT = 40;
+static constexpr int UI_DRIVER_SIDE_LEN = 2;
+static constexpr int UI_APMV3_BRANCH_BIT = 40;
+static constexpr int UI_APMV3_BRANCH_LEN = 3;
+static constexpr int UI_AUTO_LANE_CHANGE_ENABLE_BIT = 24;
+static constexpr int UI_AUTO_LANE_CHANGE_ENABLE_LEN = 2;
+static constexpr uint8_t UI_DRIVER_SIDE_RIGHT = 1;
+static constexpr uint8_t UI_APMV3_BRANCH_DEV = 2;
+static constexpr uint8_t UI_AUTO_LANE_CHANGE_ENABLE_OFF = 0;
 
 static std::vector<can_frame> busWrites;
 static FloodSlot floodSlots[kFloodSlotCount];
@@ -74,6 +84,49 @@ inline void setBit(can_frame& frame, int bit, bool value) {
   }
 }
 
+inline uint32_t readField(const can_frame& frame, int startBit, int length) {
+  uint32_t value = 0;
+  for (int i = 0; i < length; ++i) {
+    const int absoluteBit = startBit + i;
+    const int byteIndex = absoluteBit / 8;
+    const int bitIndex = absoluteBit % 8;
+    if ((frame.data[byteIndex] >> bitIndex) & 0x01) {
+      value |= (1UL << i);
+    }
+  }
+  return value;
+}
+
+inline void setField(can_frame& frame, int startBit, int length, uint32_t value) {
+  for (int i = 0; i < length; ++i) {
+    setBit(frame, startBit + i, (value >> i) & 0x01);
+  }
+}
+
+inline uint8_t readDriverSide(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_DRIVER_SIDE_BIT, UI_DRIVER_SIDE_LEN));
+}
+
+inline void setDriverSide(can_frame& frame, uint8_t value) {
+  setField(frame, UI_DRIVER_SIDE_BIT, UI_DRIVER_SIDE_LEN, value);
+}
+
+inline uint8_t readApmv3Branch(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN));
+}
+
+inline void setApmv3Branch(can_frame& frame, uint8_t value) {
+  setField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN, value);
+}
+
+inline uint8_t readAutoLaneChangeEnable(const can_frame& frame) {
+  return static_cast<uint8_t>(readField(frame, UI_AUTO_LANE_CHANGE_ENABLE_BIT, UI_AUTO_LANE_CHANGE_ENABLE_LEN));
+}
+
+inline void setAutoLaneChangeEnable(can_frame& frame, uint8_t value) {
+  setField(frame, UI_AUTO_LANE_CHANGE_ENABLE_BIT, UI_AUTO_LANE_CHANGE_ENABLE_LEN, value);
+}
+
 inline bool sameMessageKey(const MessageKey& lhs, const MessageKey& rhs) {
   return lhs.can_id == rhs.can_id &&
          lhs.selector == rhs.selector &&
@@ -90,6 +143,7 @@ MessageKey makeMessageKey(const can_frame& frame) {
     key.selector = readMuxID(frame);
     key.type = KEY_LOW3_MUX;
     break;
+  case 659:
   case 1016:
     key.type = KEY_ID_ONLY;
     break;
@@ -227,8 +281,17 @@ struct CarManagerBase {
   virtual ~CarManagerBase() = default;
 };
 
+inline bool handleCommonUiChassisControl(can_frame& frame) {
+  if (frame.can_id != UI_CHASSIS_CONTROL_ID) return false;
+  setAutoLaneChangeEnable(frame, UI_AUTO_LANE_CHANGE_ENABLE_OFF);
+  canSend(frame);
+  return true;
+}
+
 struct LegacyHandler : public CarManagerBase {
   bool handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return true;
+
     switch (frame.can_id) {
     case 1006:
       switch (readMuxID(frame)) {
@@ -267,6 +330,8 @@ struct HW3Handler : public CarManagerBase {
   int speedOffset = 0;
 
   bool handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return true;
+
     switch (frame.can_id) {
     case 1016: {
       uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
@@ -278,6 +343,7 @@ struct HW3Handler : public CarManagerBase {
       }
       setBit(frame, 5, true);
       setBit(frame, 14, true);
+      setDriverSide(frame, UI_DRIVER_SIDE_RIGHT);
       canSend(frame);
       return true;
     }
@@ -294,6 +360,7 @@ struct HW3Handler : public CarManagerBase {
         break;
       }
       case 1:
+        setApmv3Branch(frame, UI_APMV3_BRANCH_DEV);
         setBit(frame, 19, false);
         setBit(frame, 43, false);
         canSend(frame);
@@ -322,6 +389,8 @@ struct HW3Handler : public CarManagerBase {
 
 struct HW4Handler : public CarManagerBase {
   bool handelMessage(can_frame& frame) override {
+    if (handleCommonUiChassisControl(frame)) return true;
+
     switch (frame.can_id) {
     case 1016: {
       auto fd = (frame.data[5] & 0b11100000) >> 5;
@@ -334,6 +403,7 @@ struct HW4Handler : public CarManagerBase {
       }
       setBit(frame, 5, true);
       setBit(frame, 14, true);
+      setDriverSide(frame, UI_DRIVER_SIDE_RIGHT);
       canSend(frame);
       return true;
     }
@@ -347,6 +417,7 @@ struct HW4Handler : public CarManagerBase {
         canSend(frame);
         break;
       case 1:
+        setApmv3Branch(frame, UI_APMV3_BRANCH_DEV);
         setBit(frame, 19, false);
         setBit(frame, 43, false);
         setBit(frame, 47, true);
@@ -445,12 +516,14 @@ void test_makeMessageKey_distinguishes_mux_rules() {
   can_frame carCfg2 = makeFrame(2047, 0x02);
   can_frame carCfg3 = makeFrame(2047, 0x03);
   can_frame idOnly = makeFrame(1016, 0x07);
+  can_frame chassis = makeFrame(659);
 
   MessageKey keyMux0 = makeMessageKey(mux0);
   MessageKey keyMux1 = makeMessageKey(mux1);
   MessageKey keyCfg2 = makeMessageKey(carCfg2);
   MessageKey keyCfg3 = makeMessageKey(carCfg3);
   MessageKey keyIdOnly = makeMessageKey(idOnly);
+  MessageKey keyChassis = makeMessageKey(chassis);
 
   ASSERT_EQ(keyMux0.type, KEY_LOW3_MUX);
   ASSERT_EQ(keyMux1.selector, 1);
@@ -459,6 +532,7 @@ void test_makeMessageKey_distinguishes_mux_rules() {
   ASSERT_FALSE(sameMessageKey(keyCfg2, keyCfg3));
   ASSERT_EQ(keyIdOnly.type, KEY_ID_ONLY);
   ASSERT_EQ(keyIdOnly.selector, 0);
+  ASSERT_EQ(keyChassis.type, KEY_ID_ONLY);
 }
 
 void test_first_capture_only_arms_slot_without_flood() {
@@ -615,10 +689,18 @@ void test_legacy_handler_registers_expected_targets() {
   can_frame cfg = makeFrame(2047, 0x02, 0, 0, 0, 0, 0xFF);
   handler.handelMessage(cfg);
 
-  ASSERT_EQ(countActiveSlots(), 3);
+  simulatedNowUs = 400000;
+  can_frame chassis = makeFrame(659);
+  chassis.data[3] = 0x03;
+  handler.handelMessage(chassis);
+
+  ASSERT_EQ(countActiveSlots(), 4);
   ASSERT_TRUE(findSlot(makeMessageKey(m0)) != nullptr);
   ASSERT_TRUE(findSlot(makeMessageKey(m1)) != nullptr);
   ASSERT_TRUE(findSlot(makeMessageKey(cfg)) != nullptr);
+  FloodSlot* slotChassis = findSlot(makeMessageKey(chassis));
+  ASSERT_TRUE(slotChassis != nullptr);
+  ASSERT_EQ(readAutoLaneChangeEnable(slotChassis->frame), UI_AUTO_LANE_CHANGE_ENABLE_OFF);
 }
 
 void test_hw3_handler_registers_expected_targets() {
@@ -645,14 +727,24 @@ void test_hw3_handler_registers_expected_targets() {
   can_frame cfg = makeFrame(2047, 0x02, 0, 0, 0, 0, 0xFF);
   handler.handelMessage(cfg);
 
-  ASSERT_EQ(countActiveSlots(), 5);
+  simulatedNowUs = 600000;
+  can_frame chassis = makeFrame(659);
+  chassis.data[3] = 0x03;
+  handler.handelMessage(chassis);
+
+  ASSERT_EQ(countActiveSlots(), 6);
   ASSERT_TRUE(findSlot(makeMessageKey(id1016)) != nullptr);
   ASSERT_TRUE(findSlot(makeMessageKey(m0)) != nullptr);
   FloodSlot* slotM1 = findSlot(makeMessageKey(m1));
   ASSERT_TRUE(slotM1 != nullptr);
   ASSERT_FALSE((slotM1->frame.data[5] >> 3) & 0x01);
+  ASSERT_EQ(readApmv3Branch(slotM1->frame), UI_APMV3_BRANCH_DEV);
+  ASSERT_EQ(readDriverSide(findSlot(makeMessageKey(id1016))->frame), UI_DRIVER_SIDE_RIGHT);
   ASSERT_TRUE(findSlot(makeMessageKey(m2)) != nullptr);
   ASSERT_TRUE(findSlot(makeMessageKey(cfg)) != nullptr);
+  FloodSlot* slotChassis = findSlot(makeMessageKey(chassis));
+  ASSERT_TRUE(slotChassis != nullptr);
+  ASSERT_EQ(readAutoLaneChangeEnable(slotChassis->frame), UI_AUTO_LANE_CHANGE_ENABLE_OFF);
 }
 
 void test_hw4_handler_registers_expected_targets() {
@@ -679,14 +771,24 @@ void test_hw4_handler_registers_expected_targets() {
   can_frame cfg = makeFrame(2047, 0x02, 0, 0, 0, 0, 0xFF);
   handler.handelMessage(cfg);
 
-  ASSERT_EQ(countActiveSlots(), 5);
+  simulatedNowUs = 600000;
+  can_frame chassis = makeFrame(659);
+  chassis.data[3] = 0x03;
+  handler.handelMessage(chassis);
+
+  ASSERT_EQ(countActiveSlots(), 6);
   ASSERT_TRUE(findSlot(makeMessageKey(id1016)) != nullptr);
   ASSERT_TRUE(findSlot(makeMessageKey(m0)) != nullptr);
   FloodSlot* slotM1 = findSlot(makeMessageKey(m1));
   ASSERT_TRUE(slotM1 != nullptr);
   ASSERT_FALSE((slotM1->frame.data[5] >> 3) & 0x01);
+  ASSERT_EQ(readApmv3Branch(slotM1->frame), UI_APMV3_BRANCH_DEV);
+  ASSERT_EQ(readDriverSide(findSlot(makeMessageKey(id1016))->frame), UI_DRIVER_SIDE_RIGHT);
   ASSERT_TRUE(findSlot(makeMessageKey(m2)) != nullptr);
   ASSERT_TRUE(findSlot(makeMessageKey(cfg)) != nullptr);
+  FloodSlot* slotChassis = findSlot(makeMessageKey(chassis));
+  ASSERT_TRUE(slotChassis != nullptr);
+  ASSERT_EQ(readAutoLaneChangeEnable(slotChassis->frame), UI_AUTO_LANE_CHANGE_ENABLE_OFF);
 }
 
 int main() {
