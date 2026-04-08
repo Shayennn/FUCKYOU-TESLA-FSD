@@ -21,16 +21,16 @@
 
 struct can_frame {
   uint32_t can_id;
-  uint8_t  can_dlc;
-  uint8_t  data[8];
+  uint8_t can_dlc;
+  uint8_t data[8];
 };
 
 CANSAME5x CAN;
 Adafruit_NeoPixel pixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 
-const uint32_t COLOR_RED    = Adafruit_NeoPixel::Color(255, 0, 0);
-const uint32_t COLOR_GREEN  = Adafruit_NeoPixel::Color(0, 255, 0);
-const uint32_t COLOR_BLUE   = Adafruit_NeoPixel::Color(0, 0, 255);
+const uint32_t COLOR_RED = Adafruit_NeoPixel::Color(255, 0, 0);
+const uint32_t COLOR_GREEN = Adafruit_NeoPixel::Color(0, 255, 0);
+const uint32_t COLOR_BLUE = Adafruit_NeoPixel::Color(0, 0, 255);
 const uint32_t COLOR_YELLOW = Adafruit_NeoPixel::Color(255, 255, 0);
 
 constexpr uint32_t UI_VEHICLE_CONTROL_ID = 627;
@@ -56,7 +56,7 @@ constexpr uint8_t UI_APMV3_BRANCH_DEV = 2;
 constexpr uint8_t UI_APMV3_BRANCH_STAGE2 = 3;
 constexpr uint8_t UI_APMV3_BRANCH_EAP = 4;
 constexpr uint8_t UI_APMV3_BRANCH_DEMO = 5;
-constexpr uint8_t UI_APMV3_BRANCH_OVERRIDE = UI_APMV3_BRANCH_DEV;
+constexpr uint8_t UI_APMV3_BRANCH_OVERRIDE = UI_APMV3_BRANCH_LIVE;
 constexpr uint8_t UI_AUTO_LANE_CHANGE_ENABLE_OFF = 0;
 constexpr uint8_t UI_AUTO_LANE_CHANGE_ENABLE_ON = 1;
 constexpr uint8_t UI_AUTO_LANE_CHANGE_ENABLE_SNA = 3;
@@ -66,7 +66,7 @@ constexpr uint8_t UI_DOME_LIGHT_SWITCH_ON = 1;
 constexpr uint8_t UI_DOME_LIGHT_SWITCH_AUTO = 2;
 constexpr uint32_t STARTUP_SIGNAL_PHASE_MS = 1000;
 constexpr uint32_t STARTUP_SIGNAL_RESEND_MS = 1000;
-constexpr uint8_t STARTUP_SIGNAL_PHASE_COUNT = 6; // on/off repeated three times
+constexpr uint8_t STARTUP_SIGNAL_PHASE_COUNT = 6;  // on/off repeated three times
 
 inline void setNeoColor(uint32_t color) {
   pixel.setPixelColor(0, color);
@@ -75,7 +75,7 @@ inline void setNeoColor(uint32_t color) {
 
 #define LEGACY LegacyHandler
 #define HW3 HW3Handler
-#define HW4 HW4Handler //HW4 since Version 2026.2.3 uses FSDV14, before that compile for HW3, even for HW4 vehicles.
+#define HW4 HW4Handler  //HW4 since Version 2026.2.3 uses FSDV14, before that compile for HW3, even for HW4 vehicles.
 
 
 #define HW HW3  //for what car to compile
@@ -228,31 +228,31 @@ inline void setAutoLaneChangeEnable(can_frame& frame, uint8_t value) {
 
 const char* driverSideName(uint8_t value) {
   switch (value) {
-  case UI_DRIVER_SIDE_LEFT: return "LEFT";
-  case UI_DRIVER_SIDE_RIGHT: return "RIGHT";
-  case UI_DRIVER_SIDE_UNKNOWN: return "UNKNOWN";
-  default: return "INVALID";
+    case UI_DRIVER_SIDE_LEFT: return "LEFT";
+    case UI_DRIVER_SIDE_RIGHT: return "RIGHT";
+    case UI_DRIVER_SIDE_UNKNOWN: return "UNKNOWN";
+    default: return "INVALID";
   }
 }
 
 const char* apmv3BranchName(uint8_t value) {
   switch (value) {
-  case UI_APMV3_BRANCH_LIVE: return "LIVE";
-  case UI_APMV3_BRANCH_STAGE: return "STAGE";
-  case UI_APMV3_BRANCH_DEV: return "DEV";
-  case UI_APMV3_BRANCH_STAGE2: return "STAGE2";
-  case UI_APMV3_BRANCH_EAP: return "EAP";
-  case UI_APMV3_BRANCH_DEMO: return "DEMO";
-  default: return "INVALID";
+    case UI_APMV3_BRANCH_LIVE: return "LIVE";
+    case UI_APMV3_BRANCH_STAGE: return "STAGE";
+    case UI_APMV3_BRANCH_DEV: return "DEV";
+    case UI_APMV3_BRANCH_STAGE2: return "STAGE2";
+    case UI_APMV3_BRANCH_EAP: return "EAP";
+    case UI_APMV3_BRANCH_DEMO: return "DEMO";
+    default: return "INVALID";
   }
 }
 
 const char* autoLaneChangeEnableName(uint8_t value) {
   switch (value) {
-  case UI_AUTO_LANE_CHANGE_ENABLE_OFF: return "OFF";
-  case UI_AUTO_LANE_CHANGE_ENABLE_ON: return "ON";
-  case UI_AUTO_LANE_CHANGE_ENABLE_SNA: return "SNA";
-  default: return "INVALID";
+    case UI_AUTO_LANE_CHANGE_ENABLE_OFF: return "OFF";
+    case UI_AUTO_LANE_CHANGE_ENABLE_ON: return "ON";
+    case UI_AUTO_LANE_CHANGE_ENABLE_SNA: return "SNA";
+    default: return "INVALID";
   }
 }
 
@@ -304,8 +304,7 @@ struct StartupSignal {
     if (!active || !hasTemplate || !originalCaptured) return false;
 
     const uint32_t now = millis();
-    while (phase < STARTUP_SIGNAL_PHASE_COUNT &&
-           static_cast<uint32_t>(now - phaseStartedAtMs) >= STARTUP_SIGNAL_PHASE_MS) {
+    while (phase < STARTUP_SIGNAL_PHASE_COUNT && static_cast<uint32_t>(now - phaseStartedAtMs) >= STARTUP_SIGNAL_PHASE_MS) {
       phase++;
       phaseStartedAtMs += STARTUP_SIGNAL_PHASE_MS;
       lastTxAtMs = 0;
@@ -322,8 +321,7 @@ struct StartupSignal {
       return true;
     }
 
-    if (lastTxAtMs != 0 &&
-        static_cast<uint32_t>(now - lastTxAtMs) < STARTUP_SIGNAL_RESEND_MS) {
+    if (lastTxAtMs != 0 && static_cast<uint32_t>(now - lastTxAtMs) < STARTUP_SIGNAL_RESEND_MS) {
       return false;
     }
 
@@ -344,48 +342,50 @@ struct StartupSignal {
 
 struct LegacyHandler : public CarManagerBase {
   virtual bool handelMessage(can_frame& frame) override {
-    if (handleCommonUiChassisControl(frame)) return true;
+    // if (handleCommonUiChassisControl(frame)) return true;
 
     switch (frame.can_id) {
-    case 1006: {
-      switch (readMuxID(frame)) {
-      case 0: {
-        auto off = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
-        switch (off) {
-          case 2: speedProfile = 2; break;
-          case 1: speedProfile = 1; break;
-          case 0: speedProfile = 0; break;
-          default: break;
+      case 1006:
+        {
+          switch (readMuxID(frame)) {
+            case 0:
+              {
+                auto off = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
+                switch (off) {
+                  case 2: speedProfile = 2; break;
+                  case 1: speedProfile = 1; break;
+                  case 0: speedProfile = 0; break;
+                  default: break;
+                }
+                setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
+                setSpeedProfileV12V13(frame, speedProfile);
+                canSend(frame);
+#ifdef ENABLE_PRINT
+                Serial.printf("LegacyHandler: Profile: %d\n", speedProfile);
+#endif
+                break;
+              }
+            case 1:
+              setBit(frame, 19, false);  // UI_applyEceR79: disable ECE R79 steering limit
+              canSend(frame);
+              break;
+          }
+          return true;
         }
-        setBit(frame, 46, true);   // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
-        setSpeedProfileV12V13(frame, speedProfile);
-        canSend(frame);
+      case 2047:
+        if (frame.data[0] != 2) return false;
+        {
+          uint8_t rxAutopilot = (frame.data[5] >> 2) & 0x07;
+          frame.data[5] &= ~(0x07 << 2);
+          frame.data[5] |= (3 & 0x07) << 2;
+          canSend(frame);
 #ifdef ENABLE_PRINT
-        Serial.printf("LegacyHandler: Profile: %d\n", speedProfile);
+          Serial.printf("ID2047m2: autopilot=%d->3\n", rxAutopilot);
 #endif
-        break;
-      }
-      case 1:
-        setBit(frame, 19, false);  // UI_applyEceR79: disable ECE R79 steering limit
-        canSend(frame);
-        break;
-      }
-      return true;
-    }
-    case 2047:
-      if (frame.data[0] != 2) return false;
-      {
-        uint8_t rxAutopilot = (frame.data[5] >> 2) & 0x07;
-        frame.data[5] &= ~(0x07 << 2);
-        frame.data[5] |= (3 & 0x07) << 2;
-        canSend(frame);
-#ifdef ENABLE_PRINT
-        Serial.printf("ID2047m2: autopilot=%d->3\n", rxAutopilot);
-#endif
-      }
-      return true;
-    default:
-      return false;
+        }
+        return true;
+      default:
+        return false;
     }
   }
 };
@@ -393,184 +393,191 @@ struct LegacyHandler : public CarManagerBase {
 struct HW3Handler : public CarManagerBase {
   int speedOffset = 0;
   virtual bool handelMessage(can_frame& frame) override {
-    if (handleCommonUiChassisControl(frame)) return true;
+    // if (handleCommonUiChassisControl(frame)) return true;
 
     switch (frame.can_id) {
-    case 1016: {
-      bool rxDasDev = (frame.data[0] >> 5) & 0x01;
-      bool rxHandsOff = (frame.data[1] >> 6) & 0x01;
-      bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
-      bool rxHasDriveOnNav = frame.data[6] & 0x01;
-      bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
-      uint8_t rxDriverSide = readDriverSide(frame);
-      uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
-      switch (followDistance) {
-        case 1: speedProfile = 2; break;
-        case 2: speedProfile = 1; break;
-        case 3: speedProfile = 0; break;
-        default: break;
-      }
-      setBit(frame, 5, true);   // UI_dasDeveloper: enable developer mode
-      setBit(frame, 14, true);  // UI_handsOnRequirementDisable: suppress hands-on nag
-      setBit(frame, 13, true);  // UI_driveOnMapsEnable: enable navigation on maps
-      setBit(frame, 48, true);  // UI_hasDriveOnNav: advertise nav-on-autopilot availability
-      setBit(frame, 49, true);  // UI_followNavRouteEnable: follow active navigation route
-      setDriverSide(frame, UI_DRIVER_SIDE_OVERRIDE);
-      canSend(frame);
+      case 1016:
+        {
+          bool rxDasDev = (frame.data[0] >> 5) & 0x01;
+          bool rxHandsOff = (frame.data[1] >> 6) & 0x01;
+          bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
+          bool rxHasDriveOnNav = frame.data[6] & 0x01;
+          bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
+          uint8_t rxDriverSide = readDriverSide(frame);
+          uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
+          switch (followDistance) {
+            // case 1: speedProfile = 2; break;
+            // case 2: speedProfile = 1; break;
+            case 1: speedProfile = 1; break;
+            default: speedProfile = 0; break;
+          }
+          setBit(frame, 5, true);   // UI_dasDeveloper: enable developer mode
+          setBit(frame, 14, true);  // UI_handsOnRequirementDisable: suppress hands-on nag
+          setBit(frame, 13, true);  // UI_driveOnMapsEnable: enable navigation on maps
+          setBit(frame, 48, true);  // UI_hasDriveOnNav: advertise nav-on-autopilot availability
+          setBit(frame, 49, true);  // UI_followNavRouteEnable: follow active navigation route
+          setDriverSide(frame, UI_DRIVER_SIDE_OVERRIDE);
+          canSend(frame);
 #ifdef ENABLE_PRINT
-      Serial.printf("ID1016: driverSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
-                    rxDriverSide, driverSideName(rxDriverSide),
-                    UI_DRIVER_SIDE_OVERRIDE, driverSideName(UI_DRIVER_SIDE_OVERRIDE),
-                    rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, followDistance);
+          Serial.printf("ID1016: driverSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+                        rxDriverSide, driverSideName(rxDriverSide),
+                        UI_DRIVER_SIDE_OVERRIDE, driverSideName(UI_DRIVER_SIDE_OVERRIDE),
+                        rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, followDistance);
 #endif
-      return true;
-    }
-    case 1021: {
-      auto index = readMuxID(frame);
-      bool rxFsdStops = isFSDSelectedInUI(frame);
-      switch (index) {
-      case 0: {
-        int rawOff = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
-        speedOffset = std::max(std::min(rawOff * 5, 100), 0);
-        setBit(frame, 38, true);  // UI_fsdStopsControlEnabled: enable FSD stop control
-        setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
-        setSpeedProfileV12V13(frame, speedProfile);
-        canSend(frame);
+          return true;
+        }
+      case 1021:
+        {
+          auto index = readMuxID(frame);
+          bool rxFsdStops = isFSDSelectedInUI(frame);
+          switch (index) {
+            case 0:
+              {
+                int rawOff = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
+                speedOffset = std::max(std::min(rawOff * 5, 100), 0);
+                setBit(frame, 38, true);  // UI_fsdStopsControlEnabled: enable FSD stop control
+                setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
+                setSpeedProfileV12V13(frame, speedProfile);
+                canSend(frame);
 #ifdef ENABLE_PRINT
-        Serial.printf("HW3Handler: fsdStops=%d->1 Profile: %d, Offset: %d (raw=%d)\n", rxFsdStops, speedProfile, speedOffset, rawOff);
+                Serial.printf("HW3Handler: fsdStops=%d->1 Profile: %d, Offset: %d (raw=%d)\n", rxFsdStops, speedProfile, speedOffset, rawOff);
 #endif
-        break;
-      }
-      case 1: {
-        uint8_t rxApmv3Branch = readApmv3Branch(frame);
-        // UI_applyEceR79 (bit 19): disable ECE R79 steering torque limit
-        setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
-        setBit(frame, 19, false);
-        setBit(frame, 43, false);  // UI_enableCabinCamera: keep cabin camera disabled
-        canSend(frame);
+                break;
+              }
+            case 1:
+              {
+                uint8_t rxApmv3Branch = readApmv3Branch(frame);
+                // UI_applyEceR79 (bit 19): disable ECE R79 steering torque limit
+                setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
+                setBit(frame, 19, false);
+                setBit(frame, 43, false);  // UI_enableCabinCamera: keep cabin camera disabled
+                canSend(frame);
 #ifdef ENABLE_PRINT
-        Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
-                      rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
-                      UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
+                Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
+                              rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
+                              UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
 #endif
-        break;
-      }
-      case 2:
-        // AUTOPILOT_CONTROL_2: no signals defined in DBC for this mux page.
-        // Write speedOffset (0-100%) into undocumented 8-bit field at bits 6-13:
-        //   byte 0 bits 6-7 = low 2 bits, byte 1 bits 0-5 = high 6 bits.
-        frame.data[0] &= ~(0b11000000);
-        frame.data[1] &= ~(0b00111111);
-        frame.data[0] |= (speedOffset & 0x03) << 6;
-        frame.data[1] |= (speedOffset >> 2);
-        canSend(frame);
-        break;
-      }
-      return true;
-    }
-    case 2047:
-      if (frame.data[0] != 2) return false;
-      {
-        uint8_t rxAutopilot = (frame.data[5] >> 2) & 0x07;
-        frame.data[5] &= ~(0x07 << 2);
-        frame.data[5] |= (3 & 0x07) << 2;
-        canSend(frame);
+                break;
+              }
+            case 2:
+              // AUTOPILOT_CONTROL_2: no signals defined in DBC for this mux page.
+              // Write speedOffset (0-100%) into undocumented 8-bit field at bits 6-13:
+              //   byte 0 bits 6-7 = low 2 bits, byte 1 bits 0-5 = high 6 bits.
+              frame.data[0] &= ~(0b11000000);
+              frame.data[1] &= ~(0b00111111);
+              frame.data[0] |= (speedOffset & 0x03) << 6;
+              frame.data[1] |= (speedOffset >> 2);
+              canSend(frame);
+              break;
+          }
+          return true;
+        }
+      case 2047:
+        if (frame.data[0] != 2) return false;
+        {
+          uint8_t rxAutopilot = (frame.data[5] >> 2) & 0x07;
+          frame.data[5] &= ~(0x07 << 2);
+          frame.data[5] |= (3 & 0x07) << 2;
+          canSend(frame);
 #ifdef ENABLE_PRINT
-        Serial.printf("ID2047m2: autopilot=%d->3\n", rxAutopilot);
+          Serial.printf("ID2047m2: autopilot=%d->3\n", rxAutopilot);
 #endif
-      }
-      return true;
-    default:
-      return false;
+        }
+        return true;
+      default:
+        return false;
     }
   }
 };
 
 struct HW4Handler : public CarManagerBase {
   virtual bool handelMessage(can_frame& frame) override {
-    if (handleCommonUiChassisControl(frame)) return true;
+    // if (handleCommonUiChassisControl(frame)) return true;
 
     switch (frame.can_id) {
-    case 1016: {
-      bool rxDasDev = (frame.data[0] >> 5) & 0x01;
-      bool rxHandsOff = (frame.data[1] >> 6) & 0x01;
-      bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
-      bool rxHasDriveOnNav = frame.data[6] & 0x01;
-      bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
-      uint8_t rxDriverSide = readDriverSide(frame);
-      auto fd = (frame.data[5] & 0b11100000) >> 5;
-      switch (fd) {
-        case 1: speedProfile = 3; break;
-        case 2: speedProfile = 2; break;
-        case 3: speedProfile = 1; break;
-        case 4: speedProfile = 0; break;
-        case 5: speedProfile = 4; break;
-      }
-      setBit(frame, 5, true);   // UI_dasDeveloper: enable developer mode
-      setBit(frame, 14, true);  // UI_handsOnRequirementDisable: suppress hands-on nag
-      setBit(frame, 13, true);  // UI_driveOnMapsEnable: enable navigation on maps
-      setBit(frame, 48, true);  // UI_hasDriveOnNav: advertise nav-on-autopilot availability
-      setBit(frame, 49, true);  // UI_followNavRouteEnable: follow active navigation route
-      setDriverSide(frame, UI_DRIVER_SIDE_OVERRIDE);
-      canSend(frame);
+      case 1016:
+        {
+          bool rxDasDev = (frame.data[0] >> 5) & 0x01;
+          bool rxHandsOff = (frame.data[1] >> 6) & 0x01;
+          bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
+          bool rxHasDriveOnNav = frame.data[6] & 0x01;
+          bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
+          uint8_t rxDriverSide = readDriverSide(frame);
+          auto fd = (frame.data[5] & 0b11100000) >> 5;
+          switch (fd) {
+            case 1: speedProfile = 3; break;
+            case 2: speedProfile = 2; break;
+            case 3: speedProfile = 1; break;
+            case 4: speedProfile = 0; break;
+            case 5: speedProfile = 4; break;
+          }
+          setBit(frame, 5, true);   // UI_dasDeveloper: enable developer mode
+          setBit(frame, 14, true);  // UI_handsOnRequirementDisable: suppress hands-on nag
+          setBit(frame, 13, true);  // UI_driveOnMapsEnable: enable navigation on maps
+          setBit(frame, 48, true);  // UI_hasDriveOnNav: advertise nav-on-autopilot availability
+          setBit(frame, 49, true);  // UI_followNavRouteEnable: follow active navigation route
+          setDriverSide(frame, UI_DRIVER_SIDE_OVERRIDE);
+          canSend(frame);
 #ifdef ENABLE_PRINT
-      Serial.printf("ID1016: driverSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
-                    rxDriverSide, driverSideName(rxDriverSide),
-                    UI_DRIVER_SIDE_OVERRIDE, driverSideName(UI_DRIVER_SIDE_OVERRIDE),
-                    rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, fd);
+          Serial.printf("ID1016: driverSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
+                        rxDriverSide, driverSideName(rxDriverSide),
+                        UI_DRIVER_SIDE_OVERRIDE, driverSideName(UI_DRIVER_SIDE_OVERRIDE),
+                        rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, fd);
 #endif
-      return true;
-    }
-    case 1021: {
-      auto index = readMuxID(frame);
-      bool rxFsdStops = isFSDSelectedInUI(frame);
-      switch (index) {
-      case 0:
-        setBit(frame, 38, true);  // UI_fsdStopsControlEnabled: enable FSD stop control
-        setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
-        setBit(frame, 60, true);  // undocumented in 1021 m0 (UI_enableVisionOnlyStops on 1016)
-        canSend(frame);
+          return true;
+        }
+      case 1021:
+        {
+          auto index = readMuxID(frame);
+          bool rxFsdStops = isFSDSelectedInUI(frame);
+          switch (index) {
+            case 0:
+              setBit(frame, 38, true);  // UI_fsdStopsControlEnabled: enable FSD stop control
+              setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
+              setBit(frame, 60, true);  // undocumented in 1021 m0 (UI_enableVisionOnlyStops on 1016)
+              canSend(frame);
 #ifdef ENABLE_PRINT
-        Serial.printf("HW4Handler: fsdStops=%d->1 profile: %d\n", rxFsdStops, speedProfile);
+              Serial.printf("HW4Handler: fsdStops=%d->1 profile: %d\n", rxFsdStops, speedProfile);
 #endif
-        break;
-      case 1: {
-        uint8_t rxApmv3Branch = readApmv3Branch(frame);
-        setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
-        setBit(frame, 19, false);  // UI_applyEceR79: disable ECE R79 steering limit
-        setBit(frame, 43, false);  // UI_enableCabinCamera: keep cabin camera disabled
-        setBit(frame, 47, true);   // UI_hardCoreSummon: enable hardcore summon mode
-        canSend(frame);
+              break;
+            case 1:
+              {
+                uint8_t rxApmv3Branch = readApmv3Branch(frame);
+                setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
+                setBit(frame, 19, false);  // UI_applyEceR79: disable ECE R79 steering limit
+                setBit(frame, 43, false);  // UI_enableCabinCamera: keep cabin camera disabled
+                setBit(frame, 47, true);   // UI_hardCoreSummon: enable hardcore summon mode
+                canSend(frame);
 #ifdef ENABLE_PRINT
-        Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
-                      rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
-                      UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
+                Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
+                              rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
+                              UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
 #endif
-        break;
-      }
-      case 2:
-        // AUTOPILOT_CONTROL_2: write speedProfile into undocumented 3-bit field at byte 7 bits 4-6
-        frame.data[7] &= ~(0x07 << 4);
-        frame.data[7] |= (speedProfile & 0x07) << 4;
-        canSend(frame);
-        break;
-      }
-      return true;
-    }
-    case 2047:
-      if (frame.data[0] != 2) return false;
-      {
-        uint8_t rxAutopilot = (frame.data[5] >> 2) & 0x07;
-        frame.data[5] &= ~(0x07 << 2);
-        frame.data[5] |= (4 & 0x07) << 2;
-        canSend(frame);
+                break;
+              }
+            case 2:
+              // AUTOPILOT_CONTROL_2: write speedProfile into undocumented 3-bit field at byte 7 bits 4-6
+              frame.data[7] &= ~(0x07 << 4);
+              frame.data[7] |= (speedProfile & 0x07) << 4;
+              canSend(frame);
+              break;
+          }
+          return true;
+        }
+      case 2047:
+        if (frame.data[0] != 2) return false;
+        {
+          uint8_t rxAutopilot = (frame.data[5] >> 2) & 0x07;
+          frame.data[5] &= ~(0x07 << 2);
+          frame.data[5] |= (4 & 0x07) << 2;
+          canSend(frame);
 #ifdef ENABLE_PRINT
-        Serial.printf("ID2047m2: autopilot=%d->4\n", rxAutopilot);
+          Serial.printf("ID2047m2: autopilot=%d->4\n", rxAutopilot);
 #endif
-      }
-      return true;
-    default:
-      return false;
+        }
+        return true;
+      default:
+        return false;
     }
   }
 };
