@@ -393,6 +393,53 @@ void test_hw4_2047_sets_autopilot_to_4() {
   ASSERT_EQ(getField(sentFrames[0], 42, 3), 4);
 }
 
+void test_hw3_navStopsDisabled_clears_nav_bits() {
+  HW3Handler handler;
+  handler.navStopsEnabled = false;
+  can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, 2u << 5);
+  handler.handleMessage(frame, makeSink());
+  ASSERT_EQ((int)sentFrames.size(), 1);
+  ASSERT_TRUE(getBit(sentFrames[0], 5));   // dasDeveloper still set
+  ASSERT_FALSE(getBit(sentFrames[0], 13)); // driveOnMapsEnable off
+  ASSERT_TRUE(getBit(sentFrames[0], 14));  // handsOnRequirementDisable still set
+  ASSERT_FALSE(getBit(sentFrames[0], 48)); // hasDriveOnNav off
+  ASSERT_FALSE(getBit(sentFrames[0], 49)); // followNavRouteEnable off
+}
+
+void test_hw3_navStopsDisabled_clears_fsdStops() {
+  HW3Handler handler;
+  handler.navStopsEnabled = false;
+  can_frame frame = makeFrame(1021, 0x00, 0, 0, 60);
+  handler.handleMessage(frame, makeSink());
+  ASSERT_EQ((int)sentFrames.size(), 1);
+  ASSERT_FALSE(getBit(sentFrames[0], 38)); // fsdStopsControlEnabled off
+  ASSERT_TRUE(getBit(sentFrames[0], 46));  // showTrackLabels still set
+}
+
+void test_hw4_navStopsDisabled_clears_nav_bits() {
+  HW4Handler handler;
+  handler.navStopsEnabled = false;
+  can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, 2u << 5);
+  handler.handleMessage(frame, makeSink());
+  ASSERT_EQ((int)sentFrames.size(), 1);
+  ASSERT_TRUE(getBit(sentFrames[0], 5));
+  ASSERT_FALSE(getBit(sentFrames[0], 13));
+  ASSERT_TRUE(getBit(sentFrames[0], 14));
+  ASSERT_FALSE(getBit(sentFrames[0], 48));
+  ASSERT_FALSE(getBit(sentFrames[0], 49));
+}
+
+void test_hw4_navStopsDisabled_clears_fsdStops_and_visionStops() {
+  HW4Handler handler;
+  handler.navStopsEnabled = false;
+  can_frame frame = makeFrame(1021, 0x00);
+  handler.handleMessage(frame, makeSink());
+  ASSERT_EQ((int)sentFrames.size(), 1);
+  ASSERT_FALSE(getBit(sentFrames[0], 38)); // fsdStopsControlEnabled off
+  ASSERT_TRUE(getBit(sentFrames[0], 46));  // showTrackLabels still set
+  ASSERT_FALSE(getBit(sentFrames[0], 60)); // enableVisionOnlyStops off
+}
+
 void test_handle_result_tracks_send_failure() {
   HW3Handler handler;
   can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, 1u << 5);
@@ -441,6 +488,12 @@ int main() {
   RUN(test_hw4_1021_mux1_sets_branch_and_bit47);
   RUN(test_hw4_1021_mux2_writes_speed_profile);
   RUN(test_hw4_2047_sets_autopilot_to_4);
+
+  printf("\n=== navStopsEnabled toggle tests ===\n");
+  RUN(test_hw3_navStopsDisabled_clears_nav_bits);
+  RUN(test_hw3_navStopsDisabled_clears_fsdStops);
+  RUN(test_hw4_navStopsDisabled_clears_nav_bits);
+  RUN(test_hw4_navStopsDisabled_clears_fsdStops_and_visionStops);
 
   printf("\n=== Result tests ===\n");
   RUN(test_handle_result_tracks_send_failure);
