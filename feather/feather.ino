@@ -15,15 +15,13 @@
 
 #include <algorithm>
 #include <cstring>
-#include <memory>
-#include <CANSAME5x.h>
-#include <Adafruit_NeoPixel.h>
 
-struct can_frame {
-  uint32_t can_id;
-  uint8_t can_dlc;
-  uint8_t data[8];
-};
+#include <Adafruit_NeoPixel.h>
+#include <CANSAME5x.h>
+
+#include "../shared/vehicle_logic.h"
+
+using tesla_fsd::can_frame;
 
 CANSAME5x CAN;
 Adafruit_NeoPixel pixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
@@ -33,38 +31,18 @@ const uint32_t COLOR_GREEN = Adafruit_NeoPixel::Color(0, 255, 0);
 const uint32_t COLOR_BLUE = Adafruit_NeoPixel::Color(0, 0, 255);
 const uint32_t COLOR_YELLOW = Adafruit_NeoPixel::Color(255, 255, 0);
 
-constexpr uint32_t UI_DRIVER_ASSIST_CONTROL_ID = 1016;
-constexpr uint32_t UI_AUTOPILOT_CONTROL_ID = 1021;
-constexpr int UI_DRIVING_SIDE_BIT = 40;
-constexpr int UI_DRIVING_SIDE_LEN = 2;
-constexpr int UI_APMV3_BRANCH_BIT = 40;
-constexpr int UI_APMV3_BRANCH_LEN = 3;
-constexpr uint8_t UI_APMV3_BRANCH_MUX = 1;
-constexpr uint8_t UI_DRIVING_SIDE_LEFT = 0;
-constexpr uint8_t UI_DRIVING_SIDE_RIGHT = 1;
-constexpr uint8_t UI_DRIVING_SIDE_UNKNOWN = 2;
-constexpr uint8_t UI_DRIVING_SIDE_OVERRIDE = UI_DRIVING_SIDE_LEFT;
-constexpr uint8_t UI_APMV3_BRANCH_LIVE = 0;
-constexpr uint8_t UI_APMV3_BRANCH_STAGE = 1;
-constexpr uint8_t UI_APMV3_BRANCH_DEV = 2;
-constexpr uint8_t UI_APMV3_BRANCH_STAGE2 = 3;
-constexpr uint8_t UI_APMV3_BRANCH_EAP = 4;
-constexpr uint8_t UI_APMV3_BRANCH_DEMO = 5;
-constexpr uint8_t UI_APMV3_BRANCH_OVERRIDE = UI_APMV3_BRANCH_LIVE;
 inline void setNeoColor(uint32_t color) {
   pixel.setPixelColor(0, color);
   pixel.show();
 }
 
-#define LEGACY LegacyHandler
-#define HW3 HW3Handler
-#define HW4 HW4Handler  //HW4 since Version 2026.2.3 uses FSDV14, before that compile for HW3, even for HW4 vehicles.
+#define LEGACY tesla_fsd::LegacyHandler
+#define HW3 tesla_fsd::HW3Handler
+#define HW4 tesla_fsd::HW4Handler  // HW4 since version 2026.2.3 uses FSDV14.
 
-
-#define HW HW3  //for what car to compile
+#define HW HW3  // Change to LEGACY, HW3, or HW4.
 
 #define ENABLE_PRINT
-
 
 #define LED_PIN PIN_LED
 
@@ -78,8 +56,7 @@ int canRead(can_frame& frame) {
   int packetSize = CAN.parsePacket();
   if (packetSize <= 0 || CAN.packetRtr()) return -1;
 
-  // Use the decoded RX metadata from Adafruit_CAN so we keep the original DLC
-  // even if the library returns a shorter payload length for special cases.
+  // Keep the original DLC even when the library reports a shorter payload.
   frame.can_id = static_cast<uint32_t>(CAN.packetId());
   frame.can_dlc = sanitizeDlc(CAN.packetDlc() > 0 ? CAN.packetDlc() : packetSize);
   memset(frame.data, 0, sizeof(frame.data));
@@ -98,8 +75,6 @@ int canRead(can_frame& frame) {
 
 bool canSend(const can_frame& frame) {
   const uint8_t dlc = sanitizeDlc(frame.can_dlc);
-  // The SAME5x library buffers a single packet internally. Start, write and end
-  // explicitly so we can log where TX fails instead of silently dropping frames.
   const bool began = frame.can_id > 0x7FF ? CAN.beginExtendedPacket(frame.can_id)
                                           : CAN.beginPacket(frame.can_id);
   if (!began) {
@@ -127,330 +102,56 @@ bool canSend(const can_frame& frame) {
   return true;
 }
 
-struct CarManagerBase {
-  int speedProfile = 1;
-  virtual bool handelMessage(can_frame& frame) = 0;
-};
+namespace {
 
-inline uint8_t readMuxID(const can_frame& frame) {
-  return frame.data[0] & 0x07;
+using ActiveHandler = HW;
+
+constexpr uint8_t kTxFailureLimit = 8;
+
+ActiveHandler handler;
+tesla_fsd::FrameSink frameSink;
+uint8_t consecutiveTxFailures = 0;
+bool failSafe = false;
+
+bool sendFrameViaCan(void*, const can_frame& frame) {
+  return canSend(frame);
 }
 
-inline bool isFSDSelectedInUI(const can_frame& frame) {
-  return (frame.data[4] >> 6) & 0x01;
-}
-
-inline void setSpeedProfileV12V13(can_frame& frame, int profile) {
-  frame.data[6] &= ~0x06;
-  frame.data[6] |= (profile << 1);
-}
-
-inline void setBit(can_frame& frame, int bit, bool value) {
-  // Determine which byte and which bit within that byte
-  int byteIndex = bit / 8;
-  int bitIndex = bit % 8;
-  // Set the desired bit
-  uint8_t mask = static_cast<uint8_t>(1U << bitIndex);
-  if (value) {
-    frame.data[byteIndex] |= mask;
-  } else {
-    frame.data[byteIndex] &= static_cast<uint8_t>(~mask);
+#ifdef ENABLE_PRINT
+void printHandlerState(const tesla_fsd::LegacyHandler& active, const can_frame& frame) {
+  if (frame.can_id == 1006 && tesla_fsd::readMuxID(frame) == 0) {
+    Serial.printf("Legacy profile=%d\n", active.speedProfile);
   }
 }
 
-inline uint32_t readField(const can_frame& frame, int startBit, int length) {
-  uint32_t value = 0;
-  for (int i = 0; i < length; ++i) {
-    const int absoluteBit = startBit + i;
-    const int byteIndex = absoluteBit / 8;
-    const int bitIndex = absoluteBit % 8;
-    if ((frame.data[byteIndex] >> bitIndex) & 0x01) {
-      value |= (1UL << i);
-    }
-  }
-  return value;
-}
-
-inline void setField(can_frame& frame, int startBit, int length, uint32_t value) {
-  for (int i = 0; i < length; ++i) {
-    setBit(frame, startBit + i, (value >> i) & 0x01);
+void printHandlerState(const tesla_fsd::HW3Handler& active, const can_frame& frame) {
+  if (frame.can_id == tesla_fsd::UI_DRIVER_ASSIST_CONTROL_ID ||
+      (frame.can_id == tesla_fsd::UI_AUTOPILOT_CONTROL_ID && tesla_fsd::readMuxID(frame) == 0)) {
+    Serial.printf("HW3 profile=%d offset=%d\n", active.speedProfile, active.speedOffset);
   }
 }
 
-inline uint8_t readDrivingSide(const can_frame& frame) {
-  return static_cast<uint8_t>(readField(frame, UI_DRIVING_SIDE_BIT, UI_DRIVING_SIDE_LEN));
-}
-
-inline uint8_t readApmv3Branch(const can_frame& frame) {
-  return static_cast<uint8_t>(readField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN));
-}
-
-inline void setDrivingSide(can_frame& frame, uint8_t value) {
-  setField(frame, UI_DRIVING_SIDE_BIT, UI_DRIVING_SIDE_LEN, value);
-}
-
-inline void setApmv3Branch(can_frame& frame, uint8_t value) {
-  setField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN, value);
-}
-
-const char* drivingSideName(uint8_t value) {
-  switch (value) {
-    case UI_DRIVING_SIDE_LEFT: return "LEFT";
-    case UI_DRIVING_SIDE_RIGHT: return "RIGHT";
-    case UI_DRIVING_SIDE_UNKNOWN: return "UNKNOWN";
-    default: return "INVALID";
+void printHandlerState(const tesla_fsd::HW4Handler& active, const can_frame& frame) {
+  if (frame.can_id == tesla_fsd::UI_DRIVER_ASSIST_CONTROL_ID ||
+      (frame.can_id == tesla_fsd::UI_AUTOPILOT_CONTROL_ID && tesla_fsd::readMuxID(frame) == 2)) {
+    Serial.printf("HW4 profile=%d\n", active.speedProfile);
   }
 }
+#else
+template <typename Handler>
+void printHandlerState(const Handler&, const can_frame&) {}
+#endif
 
-const char* apmv3BranchName(uint8_t value) {
-  switch (value) {
-    case UI_APMV3_BRANCH_LIVE: return "LIVE";
-    case UI_APMV3_BRANCH_STAGE: return "STAGE";
-    case UI_APMV3_BRANCH_DEV: return "DEV";
-    case UI_APMV3_BRANCH_STAGE2: return "STAGE2";
-    case UI_APMV3_BRANCH_EAP: return "EAP";
-    case UI_APMV3_BRANCH_DEMO: return "DEMO";
-    default: return "INVALID";
-  }
+void enterFailSafe() {
+  if (failSafe) return;
+  failSafe = true;
+  setNeoColor(COLOR_RED);
+#ifdef ENABLE_PRINT
+  Serial.println("CAN fast-path fail-safe after repeated TX failures");
+#endif
 }
 
-struct LegacyHandler : public CarManagerBase {
-  virtual bool handelMessage(can_frame& frame) override {
-    switch (frame.can_id) {
-      case 1006:
-        {
-          switch (readMuxID(frame)) {
-            case 0:
-              {
-                auto off = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
-                switch (off) {
-                  case 2: speedProfile = 2; break;
-                  case 1: speedProfile = 1; break;
-                  case 0: speedProfile = 0; break;
-                  default: break;
-                }
-                setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
-                setSpeedProfileV12V13(frame, speedProfile);
-                canSend(frame);
-#ifdef ENABLE_PRINT
-                Serial.printf("LegacyHandler: Profile: %d\n", speedProfile);
-#endif
-                break;
-              }
-            case 1:
-              setBit(frame, 19, false);  // UI_applyEceR79: disable ECE R79 steering limit
-              canSend(frame);
-              break;
-          }
-          return true;
-        }
-      case 2047:
-        if (frame.data[0] != 2) return false;
-        {
-          uint8_t rxAutopilot = (frame.data[5] >> 2) & 0x07;
-          frame.data[5] &= ~(0x07 << 2);
-          frame.data[5] |= (3 & 0x07) << 2;
-          canSend(frame);
-#ifdef ENABLE_PRINT
-          Serial.printf("ID2047m2: autopilot=%d->3\n", rxAutopilot);
-#endif
-        }
-        return true;
-      default:
-        return false;
-    }
-  }
-};
-
-struct HW3Handler : public CarManagerBase {
-  int speedOffset = 0;
-  virtual bool handelMessage(can_frame& frame) override {
-    switch (frame.can_id) {
-      case 1016:
-        {
-          bool rxDasDev = (frame.data[0] >> 5) & 0x01;
-          bool rxHandsOff = (frame.data[1] >> 6) & 0x01;
-          bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
-          bool rxHasDriveOnNav = frame.data[6] & 0x01;
-          bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
-          uint8_t rxDrivingSide = readDrivingSide(frame);
-          uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
-          switch (followDistance) {
-            // case 1: speedProfile = 2; break;
-            // case 2: speedProfile = 1; break;
-            case 1: speedProfile = 1; break;
-            default: speedProfile = 0; break;
-          }
-          setBit(frame, 5, true);   // UI_dasDeveloper: enable developer mode
-          setBit(frame, 14, true);  // UI_handsOnRequirementDisable: suppress hands-on nag
-          setBit(frame, 13, true);  // UI_driveOnMapsEnable: enable navigation on maps
-          setBit(frame, 48, true);  // UI_hasDriveOnNav: advertise nav-on-autopilot availability
-          setBit(frame, 49, true);  // UI_followNavRouteEnable: follow active navigation route
-          setDrivingSide(frame, UI_DRIVING_SIDE_OVERRIDE);
-          canSend(frame);
-#ifdef ENABLE_PRINT
-          Serial.printf("ID1016: drivingSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
-                        rxDrivingSide, drivingSideName(rxDrivingSide),
-                        UI_DRIVING_SIDE_OVERRIDE, drivingSideName(UI_DRIVING_SIDE_OVERRIDE),
-                        rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, followDistance);
-#endif
-          return true;
-        }
-      case 1021:
-        {
-          auto index = readMuxID(frame);
-          bool rxFsdStops = isFSDSelectedInUI(frame);
-          switch (index) {
-            case 0:
-              {
-                int rawOff = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
-                speedOffset = std::max(std::min(rawOff * 5, 100), 0);
-                setBit(frame, 38, true);  // UI_fsdStopsControlEnabled: enable FSD stop control
-                setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
-                setSpeedProfileV12V13(frame, speedProfile);
-                canSend(frame);
-#ifdef ENABLE_PRINT
-                Serial.printf("HW3Handler: fsdStops=%d->1 Profile: %d, Offset: %d (raw=%d)\n", rxFsdStops, speedProfile, speedOffset, rawOff);
-#endif
-                break;
-              }
-            case 1:
-              {
-                uint8_t rxApmv3Branch = readApmv3Branch(frame);
-                setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
-                setBit(frame, 19, false);  // UI_applyEceR79 (bit 19): disable ECE R79 steering torque limit
-                setBit(frame, 45, true);   // UI_showLaneGraph: show lane graph in AP mux 1
-                canSend(frame);
-#ifdef ENABLE_PRINT
-                Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
-                              rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
-                              UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
-#endif
-                break;
-              }
-            case 2:
-              // AUTOPILOT_CONTROL_2: no signals defined in DBC for this mux page.
-              // Write speedOffset (0-100%) into undocumented 8-bit field at bits 6-13:
-              //   byte 0 bits 6-7 = low 2 bits, byte 1 bits 0-5 = high 6 bits.
-              frame.data[0] &= ~(0b11000000);
-              frame.data[1] &= ~(0b00111111);
-              frame.data[0] |= (speedOffset & 0x03) << 6;
-              frame.data[1] |= (speedOffset >> 2);
-              canSend(frame);
-              break;
-          }
-          return true;
-        }
-      case 2047:
-        if (frame.data[0] != 2) return false;
-        {
-          uint8_t rxAutopilot = (frame.data[5] >> 2) & 0x07;
-          frame.data[5] &= ~(0x07 << 2);
-          frame.data[5] |= (3 & 0x07) << 2;
-          canSend(frame);
-#ifdef ENABLE_PRINT
-          Serial.printf("ID2047m2: autopilot=%d->3\n", rxAutopilot);
-#endif
-        }
-        return true;
-      default:
-        return false;
-    }
-  }
-};
-
-struct HW4Handler : public CarManagerBase {
-  virtual bool handelMessage(can_frame& frame) override {
-    switch (frame.can_id) {
-      case 1016:
-        {
-          bool rxDasDev = (frame.data[0] >> 5) & 0x01;
-          bool rxHandsOff = (frame.data[1] >> 6) & 0x01;
-          bool rxDriveOnMaps = (frame.data[1] >> 5) & 0x01;
-          bool rxHasDriveOnNav = frame.data[6] & 0x01;
-          bool rxFollowNavRoute = (frame.data[6] >> 1) & 0x01;
-          uint8_t rxDrivingSide = readDrivingSide(frame);
-          auto fd = (frame.data[5] & 0b11100000) >> 5;
-          switch (fd) {
-            case 1: speedProfile = 3; break;
-            case 2: speedProfile = 2; break;
-            case 3: speedProfile = 1; break;
-            case 4: speedProfile = 0; break;
-            case 5: speedProfile = 4; break;
-          }
-          setBit(frame, 5, true);   // UI_dasDeveloper: enable developer mode
-          setBit(frame, 14, true);  // UI_handsOnRequirementDisable: suppress hands-on nag
-          setBit(frame, 13, true);  // UI_driveOnMapsEnable: enable navigation on maps
-          setBit(frame, 48, true);  // UI_hasDriveOnNav: advertise nav-on-autopilot availability
-          setBit(frame, 49, true);  // UI_followNavRouteEnable: follow active navigation route
-          setDrivingSide(frame, UI_DRIVING_SIDE_OVERRIDE);
-          canSend(frame);
-#ifdef ENABLE_PRINT
-          Serial.printf("ID1016: drivingSide=%u (%s)->%u (%s) dasDev=%d->1 handsOffDisable=%d->1 driveOnMaps=%d->1 hasDriveOnNav=%d->1 followNavRoute=%d->1 followDist=%d\n",
-                        rxDrivingSide, drivingSideName(rxDrivingSide),
-                        UI_DRIVING_SIDE_OVERRIDE, drivingSideName(UI_DRIVING_SIDE_OVERRIDE),
-                        rxDasDev, rxHandsOff, rxDriveOnMaps, rxHasDriveOnNav, rxFollowNavRoute, fd);
-#endif
-          return true;
-        }
-      case 1021:
-        {
-          auto index = readMuxID(frame);
-          bool rxFsdStops = isFSDSelectedInUI(frame);
-          switch (index) {
-            case 0:
-              setBit(frame, 38, true);  // UI_fsdStopsControlEnabled: enable FSD stop control
-              setBit(frame, 46, true);  // UI_showTrackLabels (m1 bit, enables FSD viz in mux 0)
-              setBit(frame, 60, true);  // undocumented in 1021 m0 (UI_enableVisionOnlyStops on 1016)
-              canSend(frame);
-#ifdef ENABLE_PRINT
-              Serial.printf("HW4Handler: fsdStops=%d->1 profile: %d\n", rxFsdStops, speedProfile);
-#endif
-              break;
-            case 1:
-              {
-                uint8_t rxApmv3Branch = readApmv3Branch(frame);
-                setApmv3Branch(frame, UI_APMV3_BRANCH_OVERRIDE);
-                setBit(frame, 19, false);  // UI_applyEceR79: disable ECE R79 steering limit
-                setBit(frame, 45, true);   // UI_showLaneGraph: show lane graph in AP mux 1
-                setBit(frame, 47, true);   // UI_hardCoreSummon: enable hardcore summon mode
-                canSend(frame);
-#ifdef ENABLE_PRINT
-                Serial.printf("ID1021 m1: apmv3Branch=%u (%s)->%u (%s)\n",
-                              rxApmv3Branch, apmv3BranchName(rxApmv3Branch),
-                              UI_APMV3_BRANCH_OVERRIDE, apmv3BranchName(UI_APMV3_BRANCH_OVERRIDE));
-#endif
-                break;
-              }
-            case 2:
-              // AUTOPILOT_CONTROL_2: write speedProfile into undocumented 3-bit field at byte 7 bits 4-6
-              frame.data[7] &= ~(0x07 << 4);
-              frame.data[7] |= (speedProfile & 0x07) << 4;
-              canSend(frame);
-              break;
-          }
-          return true;
-        }
-      case 2047:
-        if (frame.data[0] != 2) return false;
-        {
-          uint8_t rxAutopilot = (frame.data[5] >> 2) & 0x07;
-          frame.data[5] &= ~(0x07 << 2);
-          frame.data[5] |= (4 & 0x07) << 2;
-          canSend(frame);
-#ifdef ENABLE_PRINT
-          Serial.printf("ID2047m2: autopilot=%d->4\n", rxAutopilot);
-#endif
-        }
-        return true;
-      default:
-        return false;
-    }
-  }
-};
-
-
-std::unique_ptr<CarManagerBase> handler;
+}  // namespace
 
 
 void setup() {
@@ -460,8 +161,9 @@ void setup() {
   pixel.setBrightness(30);
   setNeoColor(COLOR_BLUE);
 
-  handler.reset(new HW());
   delay(1500);
+
+  frameSink = {nullptr, &sendFrameViaCan};
 
 #ifdef ENABLE_PRINT
   Serial.begin(115200);
@@ -494,6 +196,24 @@ __attribute__((optimize("O3"))) void loop() {
     return;
   }
 
-  bool modified = handler->handelMessage(frame);
-  setNeoColor(modified ? COLOR_GREEN : COLOR_YELLOW);
+  if (failSafe) return;
+
+  const tesla_fsd::HandleResult result = handler.handleMessage(frame, frameSink);
+  if (!result.handled || !result.attemptedSend) {
+    setNeoColor(COLOR_YELLOW);
+    return;
+  }
+
+  if (!result.sent) {
+    if (++consecutiveTxFailures >= kTxFailureLimit) {
+      enterFailSafe();
+    } else {
+      setNeoColor(COLOR_RED);
+    }
+    return;
+  }
+
+  consecutiveTxFailures = 0;
+  setNeoColor(COLOR_GREEN);
+  printHandlerState(handler, frame);
 }
