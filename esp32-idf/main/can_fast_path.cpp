@@ -16,6 +16,7 @@ constexpr gpio_num_t kStatusLedPin = GPIO_NUM_2;
 constexpr uint8_t kTxFailureLimit = 8;
 constexpr size_t kRingBufSize = 64;
 constexpr size_t kRingBufMask = kRingBufSize - 1;
+constexpr size_t kTxSlotCount = 4;
 constexpr UBaseType_t kCanTaskPriority = configMAX_PRIORITIES - 2;
 constexpr uint32_t kCanTaskStackSize = 4096;
 constexpr BaseType_t kCanTaskCore = 1;
@@ -55,27 +56,74 @@ struct HandlerStorage {
     HandlerStorage() : type(1), hw3{} {}
 };
 
+struct TxSlot {
+    twai_frame_t frame = {};
+    uint8_t data[8] = {};
+};
+
+int sanitizeHandlerType(int type) {
+    switch (type) {
+        case 0:
+        case 1:
+        case 2:
+            return type;
+        default:
+            return 1;
+    }
+}
+
 twai_node_handle_t gNode = nullptr;
 RingBuf gRingBuf;
 TaskHandle_t gCanTask = nullptr;
 HandlerStorage gHandler;
 can_fast::Stats gStats;
 can_fast::RecoveryFn gRecoveryFn = nullptr;
+int gRequestedHandlerType = 1;
+portMUX_TYPE gHandlerRequestMux = portMUX_INITIALIZER_UNLOCKED;
 
 bool gRecoveryArmed = false;
 int64_t gRecoveryArmedTime = 0;
 bool gRecoveryFsdWasEngaged = false;
 
-uint8_t gTxData[8] = {};
+TxSlot gTxSlots[kTxSlotCount];
+size_t gTxHead = 0;
+size_t gTxTail = 0;
+size_t gTxInFlight = 0;
+uint32_t gTxDoneCount = 0;
+portMUX_TYPE gTxDoneMux = portMUX_INITIALIZER_UNLOCKED;
+
+void reclaimCompletedTx() {
+    uint32_t done = 0;
+    taskENTER_CRITICAL(&gTxDoneMux);
+    done = gTxDoneCount;
+    gTxDoneCount = 0;
+    taskEXIT_CRITICAL(&gTxDoneMux);
+
+    while (done > 0 && gTxInFlight > 0) {
+        gTxTail = (gTxTail + 1) % kTxSlotCount;
+        gTxInFlight--;
+        done--;
+    }
+}
 
 bool sendFrame(void*, const tesla_fsd::can_frame& frame) {
-    twai_frame_t tx = {};
-    tx.header.id = frame.can_id;
-    tx.header.dlc = frame.can_dlc;
-    std::memcpy(gTxData, frame.data, sizeof(frame.data));
-    tx.buffer = gTxData;
-    tx.buffer_len = frame.can_dlc;
-    return twai_node_transmit(gNode, &tx, 0) == ESP_OK;
+    reclaimCompletedTx();
+    if (gTxInFlight >= kTxSlotCount) return false;
+
+    TxSlot& slot = gTxSlots[gTxHead];
+    const uint8_t dlc = frame.can_dlc > sizeof(slot.data) ? sizeof(slot.data) : frame.can_dlc;
+    slot.frame = {};
+    slot.frame.header.id = frame.can_id;
+    slot.frame.header.dlc = dlc;
+    std::memcpy(slot.data, frame.data, sizeof(frame.data));
+    slot.frame.buffer = slot.data;
+    slot.frame.buffer_len = dlc;
+
+    if (twai_node_transmit(gNode, &slot.frame, 0) != ESP_OK) return false;
+
+    gTxHead = (gTxHead + 1) % kTxSlotCount;
+    gTxInFlight++;
+    return true;
 }
 
 tesla_fsd::HandleResult dispatch(tesla_fsd::can_frame& frame, const tesla_fsd::FrameSink& sink) {
@@ -85,6 +133,30 @@ tesla_fsd::HandleResult dispatch(tesla_fsd::can_frame& frame, const tesla_fsd::F
         case 2: return gHandler.hw4.handleMessage(frame, sink);
         default: return {};
     }
+}
+
+void applyRequestedHandlerType() {
+    int requested = 1;
+    taskENTER_CRITICAL(&gHandlerRequestMux);
+    requested = sanitizeHandlerType(gRequestedHandlerType);
+    taskEXIT_CRITICAL(&gHandlerRequestMux);
+    if (requested == gHandler.type) return;
+
+    switch (requested) {
+        case 0:
+            gHandler.legacy = {};
+            break;
+        case 1:
+            gHandler.hw3 = {};
+            break;
+        case 2:
+            gHandler.hw4 = {};
+            break;
+        default:
+            gHandler.hw3 = {};
+            break;
+    }
+    gHandler.type = requested;
 }
 
 void checkRecovery(const tesla_fsd::can_frame& frame) {
@@ -172,6 +244,14 @@ bool IRAM_ATTR onRxDone(twai_node_handle_t handle,
     return woken == pdTRUE;
 }
 
+bool IRAM_ATTR onTxDone(twai_node_handle_t,
+                        const twai_tx_done_event_data_t*, void*) {
+    taskENTER_CRITICAL_ISR(&gTxDoneMux);
+    gTxDoneCount++;
+    taskEXIT_CRITICAL_ISR(&gTxDoneMux);
+    return false;
+}
+
 bool IRAM_ATTR onStateChange(twai_node_handle_t,
                               const twai_state_change_event_data_t* edata, void*) {
     if (edata->new_sta == TWAI_ERROR_BUS_OFF) {
@@ -186,7 +266,9 @@ bool IRAM_ATTR onStateChange(twai_node_handle_t,
     uint32_t ts = 0;
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        applyRequestedHandlerType();
         while (gRingBuf.pop(frame, ts)) {
+            applyRequestedHandlerType();
             processFrame(frame, ts);
         }
     }
@@ -198,6 +280,11 @@ namespace can_fast {
 
 void init(twai_node_handle_t node) {
     gNode = node;
+    gRequestedHandlerType = gHandler.type;
+    gTxHead = 0;
+    gTxTail = 0;
+    gTxInFlight = 0;
+    gTxDoneCount = 0;
     gpio_reset_pin(kStatusLedPin);
     gpio_set_direction(kStatusLedPin, GPIO_MODE_OUTPUT);
     gpio_set_level(kStatusLedPin, 0);
@@ -205,6 +292,7 @@ void init(twai_node_handle_t node) {
 
 void start() {
     twai_event_callbacks_t cbs = {};
+    cbs.on_tx_done = &onTxDone;
     cbs.on_rx_done = &onRxDone;
     cbs.on_state_change = &onStateChange;
     ESP_ERROR_CHECK(twai_node_register_event_callbacks(gNode, &cbs, nullptr));
@@ -217,16 +305,18 @@ void start() {
 
 Stats get_stats() { return gStats; }
 
-int get_handler_type() { return gHandler.type; }
+int get_handler_type() {
+    taskENTER_CRITICAL(&gHandlerRequestMux);
+    const int type = sanitizeHandlerType(gRequestedHandlerType);
+    taskEXIT_CRITICAL(&gHandlerRequestMux);
+    return type;
+}
 
 void set_handler_type(int type) {
-    gHandler.type = type;
-    switch (type) {
-        case 0: gHandler.legacy = {}; break;
-        case 1: gHandler.hw3 = {}; break;
-        case 2: gHandler.hw4 = {}; break;
-        default: gHandler.type = 1; gHandler.hw3 = {}; break;
-    }
+    taskENTER_CRITICAL(&gHandlerRequestMux);
+    gRequestedHandlerType = sanitizeHandlerType(type);
+    taskEXIT_CRITICAL(&gHandlerRequestMux);
+    if (gCanTask) xTaskNotifyGive(gCanTask);
 }
 
 void set_recovery_callback(RecoveryFn fn) { gRecoveryFn = fn; }

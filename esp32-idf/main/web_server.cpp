@@ -201,13 +201,13 @@ pre{background:#0a0a1a;padding:8px;border-radius:4px;font-size:.8em;overflow:aut
 <h1>Tesla FSD CAN Mod</h1>
 <div id='setup' class='card' style='display:none'>
 <h2>First Boot Setup</h2>
-<label>Set Password</label><input type='password' id='pw1'>
-<label>Confirm Password</label><input type='password' id='pw2'>
+<label>Set Password</label><input type='password' id='pw1' maxlength='63'>
+<label>Confirm Password</label><input type='password' id='pw2' maxlength='63'>
 <button onclick='doSetup()'>Set Password</button>
 </div>
 <div id='login' class='card' style='display:none'>
 <h2>Login</h2>
-<label>Password</label><input type='password' id='pw'>
+<label>Password</label><input type='password' id='pw' maxlength='63'>
 <button onclick='doLogin()'>Login</button>
 <button onclick='armRecovery()'>Forgot Password</button>
 <p id='recoveryStatus'></p>
@@ -259,8 +259,10 @@ async function doSetup(){
  const p1=document.getElementById('pw1').value,p2=document.getElementById('pw2').value;
  if(p1!==p2){alert('Passwords do not match');return;}
  if(p1.length<4){alert('Password too short');return;}
- await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p1})});
- doLoginWith(p1);
+  if(p1.length>63){alert('Password too long');return;}
+  const r=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p1})});
+  if(!r.ok){alert('Setup failed');return;}
+  doLoginWith(p1);
 }
 async function doLogin(){doLoginWith(document.getElementById('pw').value);}
 async function doLoginWith(pw){
@@ -398,16 +400,18 @@ bool parseHexResponse(const char* hex, size_t hexLen, uint8_t* out, size_t outLe
     return true;
 }
 
-const char* findJsonString(const char* json, const char* key, char* val, size_t valLen) {
+const char* findJsonString(const char* json, const char* key, char* val, size_t valLen, bool* truncated = nullptr) {
     char pattern[64];
     snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
     const char* p = std::strstr(json, pattern);
     if (!p) return nullptr;
     p += std::strlen(pattern);
+    if (truncated) *truncated = false;
     size_t i = 0;
     while (*p && *p != '"' && i < valLen - 1) {
         val[i++] = *p++;
     }
+    if (truncated && *p != '"') *truncated = true;
     val[i] = '\0';
     return val;
 }
@@ -470,7 +474,8 @@ esp_err_t handlerSetup(httpd_req_t* req) {
         return ESP_FAIL;
     }
     char password[auth::kPasswordMaxLen + 1] = {};
-    if (!findJsonString(buf, "password", password, sizeof(password))) {
+    bool truncated = false;
+    if (!findJsonString(buf, "password", password, sizeof(password), &truncated) || truncated) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_send(req, "{}", 2);
         return ESP_FAIL;
@@ -541,6 +546,7 @@ esp_err_t handlerCanLog(httpd_req_t* req) {
         httpd_resp_send_chunk(req, entry, n);
     }
     httpd_resp_send_chunk(req, "]}", 2);
+    httpd_resp_send_chunk(req, nullptr, 0);
     return ESP_OK;
 }
 
