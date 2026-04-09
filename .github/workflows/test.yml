@@ -16,3 +16,6 @@ jobs:
 
       - name: Run desktop tests
         run: make -C test test
+
+      - name: Run sanitizer-backed desktop tests
+        run: make -C test sanitize

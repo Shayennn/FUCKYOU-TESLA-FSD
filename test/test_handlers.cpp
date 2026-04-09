@@ -1,280 +1,50 @@
 /*
- * Desktop simulation test for CAN frame handler logic.
- * Compiles with any C++14 compiler — no Arduino dependencies.
+ * Desktop tests for shared CAN handler logic.
  *
  *   cd test && make
  */
 
 #include <cstdint>
-#include <cstring>
 #include <cstdio>
-#include <algorithm>
 #include <vector>
 
-// ============================================================
-// Types & stubs
-// ============================================================
+#include "../shared/vehicle_logic.h"
 
-struct can_frame {
-  uint32_t can_id;
-  uint8_t  can_dlc;
-  uint8_t  data[8];
-};
+using tesla_fsd::FrameSink;
+using tesla_fsd::HandleResult;
+using tesla_fsd::HW3Handler;
+using tesla_fsd::HW4Handler;
+using tesla_fsd::LegacyHandler;
+using tesla_fsd::UI_APMV3_BRANCH_DEV;
+using tesla_fsd::UI_APMV3_BRANCH_OVERRIDE;
+using tesla_fsd::UI_DRIVING_SIDE_LEFT;
+using tesla_fsd::UI_DRIVING_SIDE_OVERRIDE;
+using tesla_fsd::can_frame;
+using tesla_fsd::isFSDSelectedInUI;
+using tesla_fsd::readApmv3Branch;
+using tesla_fsd::readDrivingSide;
+using tesla_fsd::readMuxID;
+using tesla_fsd::setBit;
+using tesla_fsd::setSpeedProfileV12V13;
 
 static std::vector<can_frame> sentFrames;
+static bool sendSucceeds = true;
 
-constexpr int UI_DRIVING_SIDE_BIT = 40;
-constexpr int UI_DRIVING_SIDE_LEN = 2;
-constexpr int UI_APMV3_BRANCH_BIT = 40;
-constexpr int UI_APMV3_BRANCH_LEN = 3;
-constexpr uint8_t UI_DRIVING_SIDE_RIGHT = 1;
-constexpr uint8_t UI_APMV3_BRANCH_DEV = 2;
-
-void canSend(can_frame& frame) {
+static bool recordFrameSend(void*, const can_frame& frame) {
   sentFrames.push_back(frame);
+  return sendSucceeds;
 }
 
-// ============================================================
-// Pure logic (extracted from CanFeather.ino, no Arduino deps)
-// ============================================================
-
-inline uint8_t readMuxID(const can_frame& frame) {
-  return frame.data[0] & 0x07;
+static FrameSink makeSink() {
+  return {nullptr, &recordFrameSend};
 }
-
-inline bool isFSDSelectedInUI(const can_frame& frame) {
-  return (frame.data[4] >> 6) & 0x01;
-}
-
-inline void setSpeedProfileV12V13(can_frame& frame, int profile) {
-  frame.data[6] &= ~0x06;
-  frame.data[6] |= (profile << 1);
-}
-
-inline void setBit(can_frame& frame, int bit, bool value) {
-  int byteIndex = bit / 8;
-  int bitIndex  = bit % 8;
-  uint8_t mask  = static_cast<uint8_t>(1U << bitIndex);
-  if (value) {
-    frame.data[byteIndex] |= mask;
-  } else {
-    frame.data[byteIndex] &= static_cast<uint8_t>(~mask);
-  }
-}
-
-inline uint32_t readField(const can_frame& frame, int startBit, int length) {
-  uint32_t value = 0;
-  for (int i = 0; i < length; ++i) {
-    const int absoluteBit = startBit + i;
-    const int byteIndex = absoluteBit / 8;
-    const int bitIndex = absoluteBit % 8;
-    if ((frame.data[byteIndex] >> bitIndex) & 0x01) {
-      value |= (1UL << i);
-    }
-  }
-  return value;
-}
-
-inline uint8_t readDrivingSide(const can_frame& frame) {
-  return static_cast<uint8_t>(readField(frame, UI_DRIVING_SIDE_BIT, UI_DRIVING_SIDE_LEN));
-}
-
-inline uint8_t readApmv3Branch(const can_frame& frame) {
-  return static_cast<uint8_t>(readField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN));
-}
-
-inline void setField(can_frame& frame, int startBit, int length, uint32_t value) {
-  for (int i = 0; i < length; ++i) {
-    setBit(frame, startBit + i, (value >> i) & 0x01);
-  }
-}
-
-inline void setDrivingSide(can_frame& frame, uint8_t value) {
-  setField(frame, UI_DRIVING_SIDE_BIT, UI_DRIVING_SIDE_LEN, value);
-}
-
-inline void setApmv3Branch(can_frame& frame, uint8_t value) {
-  setField(frame, UI_APMV3_BRANCH_BIT, UI_APMV3_BRANCH_LEN, value);
-}
-
-struct CarManagerBase {
-  int speedProfile = 1;
-  virtual bool handelMessage(can_frame& frame) = 0;
-  virtual ~CarManagerBase() = default;
-};
-
-// ---- LegacyHandler ----
-
-struct LegacyHandler : public CarManagerBase {
-  bool handelMessage(can_frame& frame) override {
-    switch (frame.can_id) {
-    case 1006: {
-      switch (readMuxID(frame)) {
-      case 0: {
-        auto off = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
-        switch (off) {
-          case 2: speedProfile = 2; break;
-          case 1: speedProfile = 1; break;
-          case 0: speedProfile = 0; break;
-          default: break;
-        }
-        setBit(frame, 46, true);
-        setSpeedProfileV12V13(frame, speedProfile);
-        canSend(frame);
-        break;
-      }
-      case 1:
-        setBit(frame, 19, false);
-        canSend(frame);
-        break;
-      }
-      return true;
-    }
-    case 2047:
-      if (frame.data[0] != 2) return false;
-      frame.data[5] &= ~(0x07 << 2);
-      frame.data[5] |= (3 & 0x07) << 2;
-      canSend(frame);
-      return true;
-    default:
-      return false;
-    }
-  }
-};
-
-// ---- HW3Handler ----
-
-struct HW3Handler : public CarManagerBase {
-  int speedOffset = 0;
-  bool handelMessage(can_frame& frame) override {
-    switch (frame.can_id) {
-    case 1016: {
-      uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
-      switch (followDistance) {
-        case 1: speedProfile = 2; break;
-        case 2: speedProfile = 1; break;
-        case 3: speedProfile = 0; break;
-        default: break;
-      }
-      setBit(frame, 5, true);
-      setBit(frame, 14, true);
-      setBit(frame, 13, true);
-      setBit(frame, 48, true);
-      setBit(frame, 49, true);
-      setDrivingSide(frame, UI_DRIVING_SIDE_RIGHT);
-      canSend(frame);
-      return true;
-    }
-    case 1021: {
-      auto index = readMuxID(frame);
-      switch (index) {
-      case 0: {
-        int rawOff = (uint8_t)((frame.data[3] >> 1) & 0x3F) - 30;
-        speedOffset = std::max(std::min(rawOff * 5, 100), 0);
-        setBit(frame, 38, true);
-        setBit(frame, 46, true);
-        setSpeedProfileV12V13(frame, speedProfile);
-        canSend(frame);
-        break;
-      }
-      case 1:
-        setApmv3Branch(frame, UI_APMV3_BRANCH_DEV);
-        setBit(frame, 19, false);
-        setBit(frame, 43, false);
-        setBit(frame, 45, true);
-        canSend(frame);
-        break;
-      case 2:
-        frame.data[0] &= ~(0b11000000);
-        frame.data[1] &= ~(0b00111111);
-        frame.data[0] |= (speedOffset & 0x03) << 6;
-        frame.data[1] |= (speedOffset >> 2);
-        canSend(frame);
-        break;
-      }
-      return true;
-    }
-    case 2047:
-      if (frame.data[0] != 2) return false;
-      frame.data[5] &= ~(0x07 << 2);
-      frame.data[5] |= (3 & 0x07) << 2;
-      canSend(frame);
-      return true;
-    default:
-      return false;
-    }
-  }
-};
-
-// ---- HW4Handler ----
-
-struct HW4Handler : public CarManagerBase {
-  bool handelMessage(can_frame& frame) override {
-    switch (frame.can_id) {
-    case 1016: {
-      auto fd = (frame.data[5] & 0b11100000) >> 5;
-      switch (fd) {
-        case 1: speedProfile = 3; break;
-        case 2: speedProfile = 2; break;
-        case 3: speedProfile = 1; break;
-        case 4: speedProfile = 0; break;
-        case 5: speedProfile = 4; break;
-      }
-      setBit(frame, 5, true);
-      setBit(frame, 14, true);
-      setBit(frame, 13, true);
-      setBit(frame, 48, true);
-      setBit(frame, 49, true);
-      setDrivingSide(frame, UI_DRIVING_SIDE_RIGHT);
-      canSend(frame);
-      return true;
-    }
-    case 1021: {
-      auto index = readMuxID(frame);
-      switch (index) {
-      case 0:
-        setBit(frame, 38, true);
-        setBit(frame, 46, true);
-        setBit(frame, 60, true);
-        canSend(frame);
-        break;
-      case 1:
-        setApmv3Branch(frame, UI_APMV3_BRANCH_DEV);
-        setBit(frame, 19, false);
-        setBit(frame, 43, false);
-        setBit(frame, 45, true);
-        setBit(frame, 47, true);
-        canSend(frame);
-        break;
-      case 2:
-        frame.data[7] &= ~(0x07 << 4);
-        frame.data[7] |= (speedProfile & 0x07) << 4;
-        canSend(frame);
-        break;
-      }
-      return true;
-    }
-    case 2047:
-      if (frame.data[0] != 2) return false;
-      frame.data[5] &= ~(0x07 << 2);
-      frame.data[5] |= (4 & 0x07) << 2;
-      canSend(frame);
-      return true;
-    default:
-      return false;
-    }
-  }
-};
-
-// ============================================================
-// Test harness
-// ============================================================
 
 static int testsPassed = 0;
 static int testsFailed = 0;
 
 #define RUN(fn) do { \
   sentFrames.clear(); \
+  sendSucceeds = true; \
   printf("  %-60s ", #fn); \
   fn(); \
   printf("PASS\n"); \
@@ -299,229 +69,235 @@ static int testsFailed = 0;
   } \
 } while (0)
 
-// ---- helpers ----
-
-static bool getBit(const can_frame& f, int bit) {
-  return (f.data[bit / 8] >> (bit % 8)) & 0x01;
+static bool getBit(const can_frame& frame, int bit) {
+  return (frame.data[bit / 8] >> (bit % 8)) & 0x01;
 }
 
-static uint8_t getField(const can_frame& f, int startBit, int width) {
-  return (f.data[startBit / 8] >> (startBit % 8)) & ((1 << width) - 1);
+static uint8_t getField(const can_frame& frame, int startBit, int width) {
+  return (frame.data[startBit / 8] >> (startBit % 8)) & ((1 << width) - 1);
 }
 
 static can_frame makeFrame(uint32_t id,
     uint8_t d0=0, uint8_t d1=0, uint8_t d2=0, uint8_t d3=0,
     uint8_t d4=0, uint8_t d5=0, uint8_t d6=0, uint8_t d7=0) {
-  can_frame f{};
-  f.can_id = id;  f.can_dlc = 8;
-  f.data[0]=d0; f.data[1]=d1; f.data[2]=d2; f.data[3]=d3;
-  f.data[4]=d4; f.data[5]=d5; f.data[6]=d6; f.data[7]=d7;
-  return f;
+  can_frame frame{};
+  frame.can_id = id;
+  frame.can_dlc = 8;
+  frame.data[0] = d0;
+  frame.data[1] = d1;
+  frame.data[2] = d2;
+  frame.data[3] = d3;
+  frame.data[4] = d4;
+  frame.data[5] = d5;
+  frame.data[6] = d6;
+  frame.data[7] = d7;
+  return frame;
 }
 
-// ============================================================
-// Utility tests
-// ============================================================
+static void assertSentResult(const HandleResult& result) {
+  ASSERT_TRUE(result.handled);
+  ASSERT_TRUE(result.attemptedSend);
+  ASSERT_TRUE(result.sent);
+}
 
 void test_setBit_sets_and_preserves() {
-  can_frame f = makeFrame(0);
-  setBit(f, 5, true);
-  ASSERT_TRUE(getBit(f, 5));
-  ASSERT_FALSE(getBit(f, 4));
-  ASSERT_FALSE(getBit(f, 6));
+  can_frame frame = makeFrame(0);
+  setBit(frame, 5, true);
+  ASSERT_TRUE(getBit(frame, 5));
+  ASSERT_FALSE(getBit(frame, 4));
+  ASSERT_FALSE(getBit(frame, 6));
 }
 
 void test_setBit_clears_and_preserves() {
-  can_frame f = makeFrame(0);
-  f.data[0] = 0xFF;
-  setBit(f, 3, false);
-  ASSERT_FALSE(getBit(f, 3));
-  ASSERT_TRUE(getBit(f, 2));
-  ASSERT_TRUE(getBit(f, 4));
+  can_frame frame = makeFrame(0);
+  frame.data[0] = 0xFF;
+  setBit(frame, 3, false);
+  ASSERT_FALSE(getBit(frame, 3));
+  ASSERT_TRUE(getBit(frame, 2));
+  ASSERT_TRUE(getBit(frame, 4));
 }
 
 void test_setBit_cross_byte_boundaries() {
-  can_frame f = makeFrame(0);
-  setBit(f, 14, true);   // byte 1 bit 6
-  ASSERT_EQ(f.data[1], 0x40);
-  setBit(f, 38, true);   // byte 4 bit 6
-  ASSERT_EQ(f.data[4], 0x40);
-  setBit(f, 60, true);   // byte 7 bit 4
-  ASSERT_EQ(f.data[7], 0x10);
+  can_frame frame = makeFrame(0);
+  setBit(frame, 14, true);
+  ASSERT_EQ(frame.data[1], 0x40);
+  setBit(frame, 38, true);
+  ASSERT_EQ(frame.data[4], 0x40);
+  setBit(frame, 60, true);
+  ASSERT_EQ(frame.data[7], 0x10);
 }
 
 void test_readMuxID_extracts_lower_3_bits() {
-  can_frame f = makeFrame(0, 0x05);
-  ASSERT_EQ(readMuxID(f), 5);
-  f.data[0] = 0xFE;   // 0xFE & 0x07 = 6
-  ASSERT_EQ(readMuxID(f), 6);
-  f.data[0] = 0x08;   // 0x08 & 0x07 = 0
-  ASSERT_EQ(readMuxID(f), 0);
+  can_frame frame = makeFrame(0, 0x05);
+  ASSERT_EQ(readMuxID(frame), 5);
+  frame.data[0] = 0xFE;
+  ASSERT_EQ(readMuxID(frame), 6);
+  frame.data[0] = 0x08;
+  ASSERT_EQ(readMuxID(frame), 0);
 }
 
 void test_isFSDSelectedInUI_reads_bit38() {
-  can_frame f = makeFrame(0, 0,0,0,0, 0x40);  // byte4=0x40 -> bit6=1
-  ASSERT_TRUE(isFSDSelectedInUI(f));
-  f.data[4] = 0xBF;   // everything except bit 6
-  ASSERT_FALSE(isFSDSelectedInUI(f));
+  can_frame frame = makeFrame(0, 0, 0, 0, 0, 0x40);
+  ASSERT_TRUE(isFSDSelectedInUI(frame));
+  frame.data[4] = 0xBF;
+  ASSERT_FALSE(isFSDSelectedInUI(frame));
 }
 
 void test_setSpeedProfileV12V13_writes_bits_1_2() {
-  can_frame f = makeFrame(0);
-  f.data[6] = 0xFF;
-  setSpeedProfileV12V13(f, 2);
-  ASSERT_EQ(f.data[6] & 0x06, 0x04);
-  ASSERT_EQ(f.data[6] & 0xF9, 0xF9);  // other bits untouched
-  setSpeedProfileV12V13(f, 0);
-  ASSERT_EQ(f.data[6] & 0x06, 0x00);
+  can_frame frame = makeFrame(0);
+  frame.data[6] = 0xFF;
+  setSpeedProfileV12V13(frame, 2);
+  ASSERT_EQ(frame.data[6] & 0x06, 0x04);
+  ASSERT_EQ(frame.data[6] & 0xF9, 0xF9);
+  setSpeedProfileV12V13(frame, 0);
+  ASSERT_EQ(frame.data[6] & 0x06, 0x00);
 }
 
 void test_readDrivingSide_extracts_bits_40_41() {
-  can_frame f = makeFrame(1016, 0, 0, 0, 0, 0, 0x02);
-  ASSERT_EQ(readDrivingSide(f), 2);
-  f.data[5] = 0x01;
-  ASSERT_EQ(readDrivingSide(f), 1);
-  f.data[5] = 0x00;
-  ASSERT_EQ(readDrivingSide(f), 0);
+  can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, 0x02);
+  ASSERT_EQ(readDrivingSide(frame), 2);
+  frame.data[5] = 0x01;
+  ASSERT_EQ(readDrivingSide(frame), 1);
+  frame.data[5] = 0x00;
+  ASSERT_EQ(readDrivingSide(frame), 0);
 }
 
 void test_readApmv3Branch_extracts_bits_40_42() {
-  can_frame f = makeFrame(1021, 0x01, 0, 0, 0, 0, 0x05);
-  ASSERT_EQ(readApmv3Branch(f), 5);
-  f.data[5] = 0x03;
-  ASSERT_EQ(readApmv3Branch(f), 3);
-  f.data[5] = 0x00;
-  ASSERT_EQ(readApmv3Branch(f), 0);
+  can_frame frame = makeFrame(1021, 0x01, 0, 0, 0, 0, 0x05);
+  ASSERT_EQ(readApmv3Branch(frame), 5);
+  frame.data[5] = 0x03;
+  ASSERT_EQ(readApmv3Branch(frame), 3);
+  frame.data[5] = 0x00;
+  ASSERT_EQ(readApmv3Branch(frame), 0);
 }
 
-// ============================================================
-// LegacyHandler tests
-// ============================================================
-
 void test_legacy_unhandled_id_returns_false() {
-  LegacyHandler h;
-  can_frame f = makeFrame(999);
-  ASSERT_FALSE(h.handelMessage(f));
+  LegacyHandler handler;
+  can_frame frame = makeFrame(999);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  ASSERT_FALSE(result.handled);
+  ASSERT_FALSE(result.attemptedSend);
   ASSERT_EQ((int)sentFrames.size(), 0);
 }
 
 void test_legacy_1006_mux0_sets_bit46_and_speed_profile() {
-  LegacyHandler h;
-  // off = ((data[3]>>1) & 0x3F) - 30;  want off=1 -> val=31, data[3]=62
-  can_frame f = makeFrame(1006, 0x00, 0,0, 62);
-  ASSERT_TRUE(h.handelMessage(f));
+  LegacyHandler handler;
+  can_frame frame = makeFrame(1006, 0x00, 0, 0, 62);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_TRUE(getBit(sentFrames[0], 46));
-  ASSERT_EQ(h.speedProfile, 1);
-  ASSERT_EQ(getField(sentFrames[0], 49, 2), 1);  // V12V13 profile in byte6 bits 1-2
+  ASSERT_EQ(handler.speedProfile, 1);
+  ASSERT_EQ(getField(sentFrames[0], 49, 2), 1);
 }
 
 void test_legacy_1006_mux1_clears_eceR79() {
-  LegacyHandler h;
-  can_frame f = makeFrame(1006, 0x01);
-  f.data[2] = 0xFF;   // bit 19 = byte2 bit3, pre-set
-  ASSERT_TRUE(h.handelMessage(f));
+  LegacyHandler handler;
+  can_frame frame = makeFrame(1006, 0x01);
+  frame.data[2] = 0xFF;
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_FALSE(getBit(sentFrames[0], 19));
 }
 
 void test_legacy_2047_sets_autopilot_to_3() {
-  LegacyHandler h;
-  can_frame f = makeFrame(2047, 2, 0,0,0,0, 0xFF);
-  ASSERT_TRUE(h.handelMessage(f));
+  LegacyHandler handler;
+  can_frame frame = makeFrame(2047, 2, 0, 0, 0, 0, 0xFF);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_EQ(getField(sentFrames[0], 42, 3), 3);
 }
 
-// ============================================================
-// HW3Handler tests
-// ============================================================
-
 void test_hw3_unhandled_id_returns_false() {
-  HW3Handler h;
-  can_frame f = makeFrame(999);
-  ASSERT_FALSE(h.handelMessage(f));
+  HW3Handler handler;
+  can_frame frame = makeFrame(999);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  ASSERT_FALSE(result.handled);
+  ASSERT_FALSE(result.attemptedSend);
   ASSERT_EQ((int)sentFrames.size(), 0);
 }
 
 void test_hw3_1016_enables_nav_on_maps_bits() {
-  HW3Handler h;
-  can_frame f = makeFrame(1016, 0,0,0,0,0, 2u << 5);  // followDist=2
-  ASSERT_TRUE(h.handelMessage(f));
+  HW3Handler handler;
+  can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, 2u << 5);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
-  ASSERT_TRUE(getBit(sentFrames[0], 5));    // UI_dasDeveloper
-  ASSERT_TRUE(getBit(sentFrames[0], 14));   // UI_handsOnRequirementDisable
-  ASSERT_TRUE(getBit(sentFrames[0], 13));   // UI_driveOnMapsEnable
-  ASSERT_TRUE(getBit(sentFrames[0], 48));   // UI_hasDriveOnNav
-  ASSERT_TRUE(getBit(sentFrames[0], 49));   // UI_followNavRouteEnable
-  ASSERT_EQ(readDrivingSide(sentFrames[0]), UI_DRIVING_SIDE_RIGHT);
-  ASSERT_EQ(h.speedProfile, 1);            // followDist 2 -> profile 1
+  ASSERT_TRUE(getBit(sentFrames[0], 5));
+  ASSERT_TRUE(getBit(sentFrames[0], 13));
+  ASSERT_TRUE(getBit(sentFrames[0], 14));
+  ASSERT_TRUE(getBit(sentFrames[0], 48));
+  ASSERT_TRUE(getBit(sentFrames[0], 49));
+  ASSERT_EQ(readDrivingSide(sentFrames[0]), UI_DRIVING_SIDE_OVERRIDE);
+  ASSERT_EQ(handler.speedProfile, 1);
 }
 
 void test_hw3_1016_follow_distance_1() {
-  HW3Handler h;
-  can_frame f = makeFrame(1016, 0,0,0,0,0, 1u << 5);
-  h.handelMessage(f);
-  ASSERT_EQ(h.speedProfile, 2);
+  HW3Handler handler;
+  can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, 1u << 5);
+  handler.handleMessage(frame, makeSink());
+  ASSERT_EQ(handler.speedProfile, 2);
 }
 
 void test_hw3_1016_follow_distance_3() {
-  HW3Handler h;
-  can_frame f = makeFrame(1016, 0,0,0,0,0, 3u << 5);
-  h.handelMessage(f);
-  ASSERT_EQ(h.speedProfile, 0);
+  HW3Handler handler;
+  can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, 3u << 5);
+  handler.handleMessage(frame, makeSink());
+  ASSERT_EQ(handler.speedProfile, 0);
 }
 
 void test_hw3_1021_mux0_sets_fsdStops_and_bit46() {
-  HW3Handler h;
-  // data[3]=60 -> ((60>>1)&0x3F)-30 = 0 -> speedProfile unchanged (default 1)
-  can_frame f = makeFrame(1021, 0x00, 0,0, 60);
-  ASSERT_TRUE(h.handelMessage(f));
+  HW3Handler handler;
+  can_frame frame = makeFrame(1021, 0x00, 0, 0, 60);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
-  ASSERT_TRUE(getBit(sentFrames[0], 38));   // UI_fsdStopsControlEnabled
+  ASSERT_TRUE(getBit(sentFrames[0], 38));
   ASSERT_TRUE(getBit(sentFrames[0], 46));
 }
 
 void test_hw3_1021_mux0_preserves_speedProfile_from_1016() {
-  HW3Handler h;
-  can_frame f1016 = makeFrame(1016, 0,0,0,0,0, 1u << 5);  // followDist=1 -> profile=2
-  h.handelMessage(f1016);
-  ASSERT_EQ(h.speedProfile, 2);
+  HW3Handler handler;
+  can_frame frame1016 = makeFrame(1016, 0, 0, 0, 0, 0, 1u << 5);
+  handler.handleMessage(frame1016, makeSink());
+  ASSERT_EQ(handler.speedProfile, 2);
   sentFrames.clear();
-  // data[3]=60 -> off=0 which USED to overwrite speedProfile to 0
-  can_frame f1021 = makeFrame(1021, 0x00, 0,0, 60);
-  h.handelMessage(f1021);
-  ASSERT_EQ(h.speedProfile, 2);   // must NOT be clobbered
+  can_frame frame1021 = makeFrame(1021, 0x00, 0, 0, 60);
+  handler.handleMessage(frame1021, makeSink());
+  ASSERT_EQ(handler.speedProfile, 2);
 }
 
 void test_hw3_1021_mux0_runs_without_fsd_gate() {
-  HW3Handler h;
-  // bit 38 NOT set in input (fsdStops=0), handler should still process
-  can_frame f = makeFrame(1021, 0x00, 0,0, 60, 0x00);
-  ASSERT_FALSE(isFSDSelectedInUI(f));
-  ASSERT_TRUE(h.handelMessage(f));
+  HW3Handler handler;
+  can_frame frame = makeFrame(1021, 0x00, 0, 0, 60, 0x00);
+  ASSERT_FALSE(isFSDSelectedInUI(frame));
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
-  ASSERT_TRUE(getBit(sentFrames[0], 38));   // forced to 1
+  ASSERT_TRUE(getBit(sentFrames[0], 38));
 }
 
-void test_hw3_1021_mux1_clears_eceR79() {
-  HW3Handler h;
-  can_frame f = makeFrame(1021, 0x01);
-  f.data[2] = 0xFF;
-  f.data[5] = 0x08;
-  ASSERT_TRUE(h.handelMessage(f));
+void test_hw3_1021_mux1_sets_branch_and_lane_graph_bits() {
+  HW3Handler handler;
+  can_frame frame = makeFrame(1021, 0x01);
+  frame.data[2] = 0xFF;
+  frame.data[5] = 0x08;
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_FALSE(getBit(sentFrames[0], 19));
-  ASSERT_FALSE(getBit(sentFrames[0], 43));
   ASSERT_TRUE(getBit(sentFrames[0], 45));
-  ASSERT_EQ(readApmv3Branch(sentFrames[0]), UI_APMV3_BRANCH_DEV);
+  ASSERT_EQ(readApmv3Branch(sentFrames[0]), UI_APMV3_BRANCH_OVERRIDE);
 }
 
 void test_hw3_1021_mux2_writes_speed_offset() {
-  HW3Handler h;
-  h.speedOffset = 25;
-  can_frame f = makeFrame(1021, 0x02, 0xFF);
-  h.handelMessage(f);
+  HW3Handler handler;
+  handler.speedOffset = 25;
+  can_frame frame = makeFrame(1021, 0x02, 0xFF);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
   uint8_t lo = (sentFrames[0].data[0] >> 6) & 0x03;
   uint8_t hi = sentFrames[0].data[1] & 0x3F;
@@ -529,93 +305,104 @@ void test_hw3_1021_mux2_writes_speed_offset() {
 }
 
 void test_hw3_2047_sets_autopilot_to_3() {
-  HW3Handler h;
-  can_frame f = makeFrame(2047, 2, 0,0,0,0, 0xFF);
-  ASSERT_TRUE(h.handelMessage(f));
+  HW3Handler handler;
+  can_frame frame = makeFrame(2047, 2, 0, 0, 0, 0, 0xFF);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ(getField(sentFrames[0], 42, 3), 3);
 }
 
-// ============================================================
-// HW4Handler tests
-// ============================================================
-
 void test_hw4_unhandled_id_returns_false() {
-  HW4Handler h;
-  can_frame f = makeFrame(999);
-  ASSERT_FALSE(h.handelMessage(f));
+  HW4Handler handler;
+  can_frame frame = makeFrame(999);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  ASSERT_FALSE(result.handled);
+  ASSERT_FALSE(result.attemptedSend);
   ASSERT_EQ((int)sentFrames.size(), 0);
 }
 
 void test_hw4_1016_enables_nav_on_maps_bits() {
-  HW4Handler h;
-  can_frame f = makeFrame(1016, 0,0,0,0,0, 2u << 5);
-  ASSERT_TRUE(h.handelMessage(f));
+  HW4Handler handler;
+  can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, 2u << 5);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_TRUE(getBit(sentFrames[0], 5));
-  ASSERT_TRUE(getBit(sentFrames[0], 14));
   ASSERT_TRUE(getBit(sentFrames[0], 13));
+  ASSERT_TRUE(getBit(sentFrames[0], 14));
   ASSERT_TRUE(getBit(sentFrames[0], 48));
   ASSERT_TRUE(getBit(sentFrames[0], 49));
-  ASSERT_EQ(readDrivingSide(sentFrames[0]), UI_DRIVING_SIDE_RIGHT);
-  ASSERT_EQ(h.speedProfile, 2);   // HW4: fd=2 -> profile=2
+  ASSERT_EQ(readDrivingSide(sentFrames[0]), UI_DRIVING_SIDE_OVERRIDE);
+  ASSERT_EQ(handler.speedProfile, 2);
 }
 
 void test_hw4_1016_follow_distance_mapping() {
-  struct { int fd; int profile; } cases[] = {
-    {1,3}, {2,2}, {3,1}, {4,0}, {5,4}
+  struct MappingCase { int followDistance; int profile; } cases[] = {
+    {1, 3}, {2, 2}, {3, 1}, {4, 0}, {5, 4},
   };
-  for (auto& c : cases) {
+
+  for (const auto& testCase : cases) {
     sentFrames.clear();
-    HW4Handler h;
-    can_frame f = makeFrame(1016, 0,0,0,0,0, (uint8_t)(c.fd << 5));
-    h.handelMessage(f);
-    ASSERT_EQ(h.speedProfile, c.profile);
+    HW4Handler handler;
+    can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, static_cast<uint8_t>(testCase.followDistance << 5));
+    handler.handleMessage(frame, makeSink());
+    ASSERT_EQ(handler.speedProfile, testCase.profile);
   }
 }
 
 void test_hw4_1021_mux0_sets_bits_38_46_60() {
-  HW4Handler h;
-  can_frame f = makeFrame(1021, 0x00);
-  ASSERT_TRUE(h.handelMessage(f));
+  HW4Handler handler;
+  can_frame frame = makeFrame(1021, 0x00);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_TRUE(getBit(sentFrames[0], 38));
   ASSERT_TRUE(getBit(sentFrames[0], 46));
   ASSERT_TRUE(getBit(sentFrames[0], 60));
 }
 
-void test_hw4_1021_mux1_clears_bit19_sets_bit47() {
-  HW4Handler h;
-  can_frame f = makeFrame(1021, 0x01);
-  f.data[2] = 0xFF;
-  f.data[5] = 0x08;
-  ASSERT_TRUE(h.handelMessage(f));
+void test_hw4_1021_mux1_sets_branch_and_bit47() {
+  HW4Handler handler;
+  can_frame frame = makeFrame(1021, 0x01);
+  frame.data[2] = 0xFF;
+  frame.data[5] = 0x08;
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_FALSE(getBit(sentFrames[0], 19));
-  ASSERT_FALSE(getBit(sentFrames[0], 43));
   ASSERT_TRUE(getBit(sentFrames[0], 45));
   ASSERT_TRUE(getBit(sentFrames[0], 47));
-  ASSERT_EQ(readApmv3Branch(sentFrames[0]), UI_APMV3_BRANCH_DEV);
+  ASSERT_EQ(readApmv3Branch(sentFrames[0]), UI_APMV3_BRANCH_OVERRIDE);
 }
 
 void test_hw4_1021_mux2_writes_speed_profile() {
-  HW4Handler h;
-  h.speedProfile = 5;
-  can_frame f = makeFrame(1021, 0x02);
-  h.handelMessage(f);
+  HW4Handler handler;
+  handler.speedProfile = 5;
+  can_frame frame = makeFrame(1021, 0x02);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ((int)sentFrames.size(), 1);
   ASSERT_EQ((sentFrames[0].data[7] >> 4) & 0x07, 5);
 }
 
 void test_hw4_2047_sets_autopilot_to_4() {
-  HW4Handler h;
-  can_frame f = makeFrame(2047, 2, 0,0,0,0, 0xFF);
-  ASSERT_TRUE(h.handelMessage(f));
+  HW4Handler handler;
+  can_frame frame = makeFrame(2047, 2, 0, 0, 0, 0, 0xFF);
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  assertSentResult(result);
   ASSERT_EQ(getField(sentFrames[0], 42, 3), 4);
 }
 
-// ============================================================
-// Main
-// ============================================================
+void test_handle_result_tracks_send_failure() {
+  HW3Handler handler;
+  can_frame frame = makeFrame(1016, 0, 0, 0, 0, 0, 1u << 5);
+  sendSucceeds = false;
+  HandleResult result = handler.handleMessage(frame, makeSink());
+  ASSERT_TRUE(result.handled);
+  ASSERT_TRUE(result.attemptedSend);
+  ASSERT_FALSE(result.sent);
+  ASSERT_EQ((int)sentFrames.size(), 1);
+}
 
 int main() {
   printf("=== Utility tests ===\n");
@@ -642,7 +429,7 @@ int main() {
   RUN(test_hw3_1021_mux0_sets_fsdStops_and_bit46);
   RUN(test_hw3_1021_mux0_preserves_speedProfile_from_1016);
   RUN(test_hw3_1021_mux0_runs_without_fsd_gate);
-  RUN(test_hw3_1021_mux1_clears_eceR79);
+  RUN(test_hw3_1021_mux1_sets_branch_and_lane_graph_bits);
   RUN(test_hw3_1021_mux2_writes_speed_offset);
   RUN(test_hw3_2047_sets_autopilot_to_3);
 
@@ -651,9 +438,12 @@ int main() {
   RUN(test_hw4_1016_enables_nav_on_maps_bits);
   RUN(test_hw4_1016_follow_distance_mapping);
   RUN(test_hw4_1021_mux0_sets_bits_38_46_60);
-  RUN(test_hw4_1021_mux1_clears_bit19_sets_bit47);
+  RUN(test_hw4_1021_mux1_sets_branch_and_bit47);
   RUN(test_hw4_1021_mux2_writes_speed_profile);
   RUN(test_hw4_2047_sets_autopilot_to_4);
+
+  printf("\n=== Result tests ===\n");
+  RUN(test_handle_result_tracks_send_failure);
 
   printf("\n========================================\n");
   printf("Results: %d passed, %d failed\n", testsPassed, testsFailed);

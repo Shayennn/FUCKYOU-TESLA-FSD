@@ -1,6 +1,6 @@
 # Compiled test binaries
 test/test_handlers
-test/test_flood_logic
+test/test_handlers_sanitize
 
 # C/C++ compiled objects and binaries
 *.o
@@ -34,10 +34,15 @@ build/
 .pio/
 .pioenvs/
 .piolibdeps/
+managed_components/
+sdkconfig
+sdkconfig.old
+.cache/
 
 # OS
 .DS_Store
 Thumbs.db
+*.dSYM/
 
 # IDE
 .vscode/

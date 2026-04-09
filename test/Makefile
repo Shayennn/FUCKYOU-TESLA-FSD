@@ -1,19 +1,31 @@
 CXX      ?= c++
-CXXFLAGS := -std=c++14 -Wall -Wextra -O2
+BASE_CXXFLAGS := -std=c++14 -Wall -Wextra
+CXXFLAGS := $(BASE_CXXFLAGS) -O2
+SANITIZER_CXXFLAGS := $(BASE_CXXFLAGS) -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
 
-TEST_BINS := test_handlers test_flood_logic
+UNAME_S := $(shell uname -s)
+SANITIZER_ENV :=
+
+ifeq ($(UNAME_S),Linux)
+SANITIZER_ENV := ASAN_OPTIONS=detect_leaks=1
+endif
+
+TEST_BINS := test_handlers test_handlers_sanitize
 
 test_handlers: test_handlers.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
-test_flood_logic: test_flood_logic.cpp
-	$(CXX) $(CXXFLAGS) -o $@ $<
+test_handlers_sanitize: test_handlers.cpp
+	$(CXX) $(SANITIZER_CXXFLAGS) -o $@ $<
 
-test: $(TEST_BINS)
+test: test_handlers
 	./test_handlers
-	./test_flood_logic
+
+sanitize: test_handlers_sanitize
+	$(SANITIZER_ENV) ./test_handlers_sanitize
 
 clean:
 	rm -f $(TEST_BINS)
+	rm -rf *.dSYM
 
-.PHONY: test clean
+.PHONY: test sanitize clean
