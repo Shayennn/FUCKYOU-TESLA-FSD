@@ -32,6 +32,12 @@ The firmware supports three Tesla hardware generations, selected at compile time
 
 > **Note:** HW4 vehicles on firmware **older than 2026.2.3** do not use FSDV14. If your vehicle is on an earlier firmware version, compile with `HW3` even if your vehicle has HW4 hardware.
 
+### Removed Experimental Variant
+
+The repository previously included an experimental `feather-flood` variant that learned the source message cadence and re-transmitted matching frames at a much higher rate.
+
+Real vehicle testing showed that this approach triggers Tesla duplicate-frame detection, so it does not work reliably on-car. That variant has been removed to avoid confusion. Use the standard `feather/feather.ino` firmware instead.
+
 ### How to Determine Your Hardware Variant
 
 - **Legacy** — Your vehicle has a **portrait-oriented center screen** and **HW3**. This applies to older Model S and Model X vehicles retrofitted with HW3.
@@ -55,6 +61,27 @@ The firmware supports three Tesla hardware generations, selected at compile time
   - `PIN_CAN_RESET` — MCP2515 hardware reset
 - CAN bus connection to the vehicle (500 kbit/s)
 
+## ESP32 Variant
+
+The primary ESP32 firmware now lives in `esp32-idf/` as a pure ESP-IDF v6.0 build
+for `ESP32-WROOM-32`.
+
+It includes:
+
+- Core 1 CAN fast-path processing
+- open AP setup at `192.168.4.1`
+- web UI, auth, CAN log, and OTA support
+- dual OTA slots and flash coredumps
+
+Use these docs:
+
+- `esp32-idf/README.md` for build, flash, and runtime details
+- `esp32-idf/HARDWARE_VALIDATION.md` for the full on-device validation workflow
+
+The shared handler implementation in `shared/vehicle_logic.h` is reused by the
+desktop tests, the legacy ESP32 sketch, and the normal feather firmware so behavior
+stays aligned across targets.
+
 ## Installation
 
 ### 1. Install the Arduino IDE
@@ -77,21 +104,25 @@ Install the following library via **Sketch → Include Library → Manage Librar
 
 - **MCP2515** by autowp — CAN controller driver (`mcp2515.h`)
 
-### 4. Select Your Hardware Target
+### 4. Open the Feather Sketch
 
-Near the top of `CanFeather.ino`, change the `HW` define to match your vehicle:
+Open `feather/feather.ino` in the Arduino IDE.
+
+### 5. Select Your Hardware Target
+
+Near the top of `feather/feather.ino`, change the `HW` define to match your vehicle:
 
 ```cpp
 #define HW HW3  // Change to LEGACY, HW3, or HW4
 ```
 
-### 5. Upload
+### 6. Upload
 
 1. Connect the Feather via USB.
 2. Select the correct board and port under **Tools**.
 3. Click **Upload**.
 
-### 6. Wiring
+### 7. Wiring
 
 The recommended connection point is the [**X179 connector**](https://service.tesla.com/docs/Model3/ElectricalReference/prog-233/connector/x179/):
 
