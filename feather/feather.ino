@@ -18,11 +18,12 @@
 
 #include <Adafruit_NeoPixel.h>
 #include <CANSAME5x.h>
-#include <FlashStorage.h>
 
-#include "../shared/vehicle_logic.h"
+#include "vehicle_logic.h"
 
 using tesla_fsd::can_frame;
+
+#define NAV_STOPS_ENABLED false  // Toggle before upload: true or false.
 
 CANSAME5x CAN;
 Adafruit_NeoPixel pixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
@@ -32,13 +33,6 @@ const uint32_t COLOR_GREEN = Adafruit_NeoPixel::Color(0, 255, 0);
 const uint32_t COLOR_BLUE = Adafruit_NeoPixel::Color(0, 0, 255);
 const uint32_t COLOR_YELLOW = Adafruit_NeoPixel::Color(255, 255, 0);
 const uint32_t COLOR_PURPLE = Adafruit_NeoPixel::Color(128, 0, 255);
-
-struct NavStopsState {
-  bool enabled;
-  uint8_t valid;  // 0xA5 when written at least once
-};
-
-FlashStorage(savedNavStops, NavStopsState);
 
 inline void setNeoColor(uint32_t color) {
   pixel.setPixelColor(0, color);
@@ -172,17 +166,11 @@ void setup() {
 
   delay(1500);
 
-  // Toggle navStopsEnabled on each boot, persisted to flash.
-  {
-    NavStopsState state = savedNavStops.read();
-    bool enabled = (state.valid != 0xA5) ? true : !state.enabled;
-    handler.navStopsEnabled = enabled;
-    savedNavStops.write({enabled, 0xA5});
-    if (!enabled) {
-      setNeoColor(COLOR_PURPLE);
-      delay(500);
-      setNeoColor(COLOR_BLUE);
-    }
+  handler.navStopsEnabled = NAV_STOPS_ENABLED;
+  if (!NAV_STOPS_ENABLED) {
+    setNeoColor(COLOR_PURPLE);
+    delay(500);
+    setNeoColor(COLOR_BLUE);
   }
 
   frameSink = {nullptr, &sendFrameViaCan};

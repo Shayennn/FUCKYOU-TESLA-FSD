@@ -11,8 +11,8 @@ struct can_frame {
 };
 
 struct FrameSink {
-  void* context = nullptr;
-  bool (*send)(void*, const can_frame&) = nullptr;
+  void* context;
+  bool (*send)(void*, const can_frame&);
 
   bool write(const can_frame& frame) const {
     return send != nullptr && send(context, frame);
@@ -20,9 +20,9 @@ struct FrameSink {
 };
 
 struct HandleResult {
-  bool handled = false;
-  bool attemptedSend = false;
-  bool sent = false;
+  bool handled;
+  bool attemptedSend;
+  bool sent;
 };
 
 #if defined(__GNUC__)
